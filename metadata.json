@@ -1,0 +1,6 @@
+{
+  "name": "GnaniKisan AI",
+  "description": "AI-Powered Farming Assistant for Indian farmers with multilingual voice guidance, crop disease diagnostics, live weather, mandi prices, and farm management.",
+  "requestFramePermissions": ["microphone", "geolocation", "camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
