@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import app from '../server';
+import app from '../server.js';
 
 /**
  * Vercel rewrites /api/<path> to this concrete function and supplies the
