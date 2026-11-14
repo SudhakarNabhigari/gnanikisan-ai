@@ -30,7 +30,8 @@ export interface AudioPlayerControls {
 }
 
 interface RecoveredAudioPayload {
-  audioBase64: string;
+  audioBase64?: string;
+  audioUrl?: string;
   audioMime: string;
   ttsProvider: TtsProviderType;
 }
@@ -41,6 +42,7 @@ interface AudioPlayerProps {
   uiLanguage?: AppLanguage;
   downloadFilename?: string;
   audioBase64?: string;
+  audioUrl?: string;
   audioMime?: string;
   ttsProvider?: string;
   ttsError?: string;
@@ -119,6 +121,7 @@ export function AudioPlayer({
   uiLanguage,
   downloadFilename,
   audioBase64,
+  audioUrl,
   audioMime,
   ttsProvider,
   ttsError,
@@ -172,6 +175,7 @@ export function AudioPlayer({
   speedRef.current = speed;
 
   const activeBase64 = recoveredAudio?.audioBase64 ?? audioBase64;
+  const activeUrl = recoveredAudio?.audioUrl ?? audioUrl;
   const activeMime = recoveredAudio?.audioMime ?? audioMime;
   const activeProvider = recoveredAudio?.ttsProvider ?? ttsProvider;
   const activeTtsError = recoveredAudio ? null : ttsError || null;
@@ -189,7 +193,7 @@ export function AudioPlayer({
     setAutoplayBlocked(false);
     setIsPausedMidway(false);
     hasAutoPlayedRef.current = false;
-  }, [turnId, audioBase64]);
+  }, [turnId, audioBase64, audioUrl]);
 
   const bars = useMemo(() => {
     return [24, 48, 36, 72, 92, 60, 84, 52, 78, 65, 42, 68, 88, 56, 44, 70, 50, 32, 46, 30];
@@ -297,6 +301,12 @@ export function AudioPlayer({
     setIsPausedMidway(false);
     setPlaybackError(null);
 
+    if (activeUrl) {
+      setResolvedMime(activeMime || 'audio/wav');
+      setBlobUrl(activeUrl);
+      return;
+    }
+
     if (!activeBase64) {
       setBlobUrl(null);
       return;
@@ -316,7 +326,7 @@ export function AudioPlayer({
     return () => {
       URL.revokeObjectURL(objectUrl);
     };
-  }, [activeBase64, activeMime]);
+  }, [activeBase64, activeMime, activeUrl, audioMime]);
 
   // Real unmount-only cleanup — NEVER tied to parent callback identity
   useEffect(() => {
@@ -397,6 +407,7 @@ export function AudioPlayer({
     try {
       const res = await apiFetch<{
         audioBase64?: string;
+        audioUrl?: string;
         audioMime?: string;
         ttsProvider?: TtsProviderType;
         ttsError?: string;
@@ -412,18 +423,16 @@ export function AudioPlayer({
         }),
       });
 
-      if (!res?.audioBase64) {
+      if (!res?.audioBase64 && !res?.audioUrl) {
         throw new Error(res?.ttsError || t.audioUnavailable);
       }
 
-      const decoded = decodeAudioBase64(res.audioBase64, res.audioMime);
-      if (!decoded) {
-        throw new Error(t.audioLoadError);
-      }
-
+      const decoded = res.audioBase64 ? decodeAudioBase64(res.audioBase64, res.audioMime) : null;
+      if (res.audioBase64 && !decoded) throw new Error(t.audioLoadError);
       const payload: RecoveredAudioPayload = {
         audioBase64: res.audioBase64,
-        audioMime: decoded.mime,
+        audioUrl: res.audioUrl,
+        audioMime: decoded?.mime || res.audioMime || 'audio/wav',
         ttsProvider: res.ttsProvider || 'gnani-timbre',
       };
       // Trigger autoplay immediately once recovered
@@ -584,6 +593,20 @@ export function AudioPlayer({
   };
 
   const handleDownloadAudio = () => {
+    if (activeUrl) {
+      void fetch(activeUrl)
+        .then((response) => {
+          if (!response.ok) throw new Error('Audio download failed.');
+          return response.blob();
+        })
+        .then((blob) => {
+          triggerBlobDownload(blob, downloadFilename || `gnanikisan-${language}-audio`);
+          setDownloaded(true);
+          window.setTimeout(() => setDownloaded(false), 2000);
+        })
+        .catch(() => setRetryError(t.audioUnavailable));
+      return;
+    }
     if (!activeBase64) return;
     const decoded = decodeAudioBase64(activeBase64, resolvedMime);
     if (!decoded) return;

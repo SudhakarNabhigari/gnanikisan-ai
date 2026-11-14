@@ -84,6 +84,8 @@ export interface VoiceTurn {
   detectedConfidence?: 'high' | 'medium' | 'low';
   audioBase64?: string;
   audioMime?: string;
+  audioStoragePath?: string;
+  audioUrl?: string;
 }
 
 export interface VoiceConversation {
@@ -132,6 +134,8 @@ export interface CropDoctorTurn {
   timestamp: string;
   audioBase64?: string;
   audioMime?: string;
+  audioStoragePath?: string;
+  audioUrl?: string;
   ttsProvider?: 'gnani-timbre' | 'gemini-fallback' | 'browser-fallback' | 'none';
   ttsError?: string;
 }
@@ -142,6 +146,7 @@ export interface CropDoctorRecord {
   location?: string;
   growthStage?: string;
   imageDataUrl: string;
+  imageStoragePath?: string;
   analysis: CropAnalysisResult;
   turns: CropDoctorTurn[];
   createdAt: string;

@@ -16,7 +16,7 @@ import {
 import { useEffect, useRef, useState } from 'react';
 import { AudioPlayer } from '../components/AudioPlayer';
 import { TRANSLATIONS } from '../i18n/translations';
-import { ApiError, apiFetch } from '../lib/api';
+import { ApiError, apiFetch, uploadSignedMedia } from '../lib/api';
 import type {
   AppLanguage,
   AuthUser,
@@ -161,11 +161,13 @@ export function CropDoctorPage({
     setError(null);
     setAnalyzing(true);
     try {
+      const imageBlob = await (await fetch(imageDataUrl)).blob();
+      const imagePath = await uploadSignedMedia(imageBlob, 'image');
       const res = await apiFetch<{ record?: CropDoctorRecord }>('/api/crop-doctor/analyze', {
         method: 'POST',
         timeoutMs: 90000,
         body: JSON.stringify({
-          imageDataUrl,
+          imagePath,
           cropName: String(cropName ?? '').trim(),
           location: String(locationInput ?? '').trim(),
           growthStage: String(growthStage ?? '').trim(),
@@ -619,6 +621,7 @@ export function CropDoctorPage({
                         uiLanguage={language}
                         downloadFilename={`gnanikisan-crop-doctor-${record.updatedAt.slice(0, 10)}-turn-${idx + 1}`}
                         audioBase64={turn.audioBase64}
+                          audioUrl={turn.audioUrl}
                         audioMime={turn.audioMime}
                         ttsProvider={turn.ttsProvider}
                         ttsError={turn.ttsError}
@@ -636,6 +639,7 @@ export function CropDoctorPage({
                                       ? {
                                           ...item,
                                           audioBase64: payload.audioBase64,
+                                              audioUrl: payload.audioUrl,
                                           audioMime: payload.audioMime,
                                           ttsProvider: payload.ttsProvider,
                                           ttsError: undefined,

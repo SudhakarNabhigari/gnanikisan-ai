@@ -484,6 +484,7 @@ export function HistoryPage({
                           uiLanguage={language}
                           downloadFilename={`gnanikisan-voice-${activeVoice.updatedAt.slice(0, 10)}-turn-${idx + 1}`}
                           audioBase64={turn.audioBase64}
+                          audioUrl={turn.audioUrl}
                           audioMime={turn.audioMime}
                           ttsProvider={turn.ttsProvider}
                           ttsError={turn.ttsError}
@@ -501,6 +502,7 @@ export function HistoryPage({
                                           ? {
                                               ...item,
                                               audioBase64: payload.audioBase64,
+                                              audioUrl: payload.audioUrl,
                                               audioMime: payload.audioMime,
                                               ttsProvider: payload.ttsProvider,
                                               ttsError: undefined,
@@ -737,6 +739,7 @@ export function HistoryPage({
                           uiLanguage={language}
                           downloadFilename={`gnanikisan-crop-doctor-${activeCrop.updatedAt.slice(0, 10)}-turn-${idx + 1}`}
                           audioBase64={turn.audioBase64}
+                          audioUrl={turn.audioUrl}
                           audioMime={turn.audioMime}
                           ttsProvider={turn.ttsProvider}
                           ttsError={turn.ttsError}
@@ -754,6 +757,7 @@ export function HistoryPage({
                                           ? {
                                               ...item,
                                               audioBase64: payload.audioBase64,
+                                              audioUrl: payload.audioUrl,
                                               audioMime: payload.audioMime,
                                               ttsProvider: payload.ttsProvider,
                                               ttsError: undefined,

@@ -18,7 +18,7 @@ import {
   type AudioPlayerControls,
 } from '../components/AudioPlayer';
 import { TRANSLATIONS } from '../i18n/translations';
-import { apiFetch } from '../lib/api';
+import { apiFetch, uploadSignedMedia } from '../lib/api';
 import { stopAllActiveAudio, unlockAudioPlayback } from '../lib/audioUnlock';
 import type {
   AppLanguage,
@@ -57,19 +57,6 @@ const SUGGESTED_QUESTIONS: Record<AppLanguage, string[]> = {
     'मेरे खेत के लिए कौन सी सरकारी योजनाएं उपयुक्त हैं?',
   ],
 };
-
-function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const result = String(reader.result || '');
-      const idx = result.indexOf(',');
-      resolve(idx >= 0 ? result.slice(idx + 1) : result);
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
-}
 
 function encodeAudioBufferToWav(buffer: AudioBuffer): ArrayBuffer {
   const numChannels = 1;
@@ -503,7 +490,7 @@ export function VoiceAssistantPage({
 
     try {
       const prepared = await encodeBlobToWav16kMono(rawBlob);
-      const audioBase64 = await blobToBase64(prepared.blob);
+      const audioPath = await uploadSignedMedia(prepared.blob, 'audio');
       const stt = await apiFetch<{
         status?: 'ok' | 'unclear';
         message?: string;
@@ -514,7 +501,7 @@ export function VoiceAssistantPage({
       }>('/api/voice/transcribe', {
         method: 'POST',
         body: JSON.stringify({
-          audioBase64,
+          audioPath,
           mimeType: prepared.mimeType,
           language: voiceMode,
           uiLanguage: language,
@@ -618,7 +605,7 @@ export function VoiceAssistantPage({
   const handleAudioRecoveredForTurn = useCallback(
     (
       turnId: string,
-      payload: { audioBase64: string; audioMime: string; ttsProvider: 'gnani-timbre' | 'gemini-fallback' | 'browser-fallback' | 'none' }
+      payload: { audioBase64?: string; audioUrl?: string; audioMime: string; ttsProvider: 'gnani-timbre' | 'gemini-fallback' | 'browser-fallback' | 'none' }
     ) => {
       setTtsNotice(null);
       setActiveAutoPlayTurnId(turnId);
@@ -631,6 +618,7 @@ export function VoiceAssistantPage({
                   ? {
                       ...item,
                       audioBase64: payload.audioBase64,
+                      audioUrl: payload.audioUrl,
                       audioMime: payload.audioMime,
                       ttsProvider: payload.ttsProvider,
                       ttsError: undefined,
@@ -1115,6 +1103,7 @@ export function VoiceAssistantPage({
                         uiLanguage={language}
                         downloadFilename={`gnanikisan-${turn.language}-turn-${idx + 1}`}
                         audioBase64={turn.audioBase64}
+                          audioUrl={turn.audioUrl}
                         audioMime={turn.audioMime}
                         ttsProvider={turn.ttsProvider}
                         ttsError={turn.ttsError}

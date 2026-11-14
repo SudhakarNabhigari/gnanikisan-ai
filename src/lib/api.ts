@@ -32,6 +32,26 @@ export function setAuthToken(token: string | null): void {
   }
 }
 
+export async function uploadSignedMedia(blob: Blob, kind: 'image' | 'audio'): Promise<string> {
+  const maxBytes = kind === 'image' ? 10 * 1024 * 1024 : 20 * 1024 * 1024;
+  if (blob.size > maxBytes) throw new ApiError(`${kind === 'image' ? 'Image' : 'Audio'} exceeds the ${kind === 'image' ? '10' : '20'} MB limit.`, 413);
+  const signed = await apiFetch<{ signedUrl: string; path: string }>('/api/media/upload-url', {
+    method: 'POST',
+    body: JSON.stringify({ kind, mimeType: blob.type || (kind === 'image' ? 'image/jpeg' : 'audio/wav') }),
+  });
+  const response = await fetch(signed.signedUrl, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': blob.type || (kind === 'image' ? 'image/jpeg' : 'audio/wav'),
+      'x-upsert': 'false',
+      'cache-control': 'max-age=3600',
+    },
+    body: blob,
+  });
+  if (!response.ok) throw new ApiError('Media upload failed. Please try again.', response.status);
+  return signed.path;
+}
+
 export interface ApiFetchOptions extends RequestInit {
   timeoutMs?: number;
 }
