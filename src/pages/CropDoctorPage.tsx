@@ -17,6 +17,7 @@ import { useEffect, useRef, useState } from 'react';
 import { AudioPlayer } from '../components/AudioPlayer';
 import { TRANSLATIONS } from '../i18n/translations';
 import { ApiError, apiFetch, uploadSignedMedia } from '../lib/api';
+import { unlockAudioPlayback } from '../lib/audioUnlock';
 import type {
   AppLanguage,
   AuthUser,
@@ -94,6 +95,7 @@ export function CropDoctorPage({
   const [followUpInput, setFollowUpInput] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [record, setRecord] = useState<CropDoctorRecord | null>(null);
+  const [activeAutoPlayTurnId, setActiveAutoPlayTurnId] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -120,6 +122,7 @@ export function CropDoctorPage({
       .then((res) => {
         const found = res.cropDoctorHistory.find((r) => r.id === initialRecordId);
         if (found) {
+          setActiveAutoPlayTurnId(null);
           setRecord(found);
           setImageDataUrl(found.imageDataUrl);
           setCropName(found.cropName);
@@ -147,6 +150,7 @@ export function CropDoctorPage({
       const optimized = await optimizeUploadDataUrl(String(reader.result));
       setImageDataUrl(optimized);
       setRecord(null);
+      setActiveAutoPlayTurnId(null);
     };
     reader.onerror = () => setError(t.errReadFail);
     reader.readAsDataURL(file);
@@ -158,6 +162,7 @@ export function CropDoctorPage({
       setError(t.errUploadFirst);
       return;
     }
+    unlockAudioPlayback();
     setError(null);
     setAnalyzing(true);
     try {
@@ -179,6 +184,8 @@ export function CropDoctorPage({
         throw new Error(t.errInvalidResponse);
       }
       setRecord(res.record);
+      const newestAssistantTurn = [...res.record.turns].reverse().find((turn) => turn.role === 'assistant');
+      setActiveAutoPlayTurnId(newestAssistantTurn?.id ?? null);
     } catch (err) {
       if (err instanceof ApiError && err.code === 'TIMEOUT') {
         setError(t.errTimeout);
@@ -194,6 +201,7 @@ export function CropDoctorPage({
     e.preventDefault();
     const q = String(followUpInput ?? '').trim();
     if (!record || !q || sendingFollowUp || analyzing) return;
+    unlockAudioPlayback();
     setFollowUpInput('');
     setSendingFollowUp(true);
     setError(null);
@@ -211,6 +219,8 @@ export function CropDoctorPage({
         throw new Error(t.errInvalidResponse);
       }
       setRecord(res.record);
+      const newestAssistantTurn = [...res.record.turns].reverse().find((turn) => turn.role === 'assistant');
+      setActiveAutoPlayTurnId(newestAssistantTurn?.id ?? null);
     } catch (err) {
       setFollowUpInput(q);
       if (err instanceof ApiError && err.code === 'TIMEOUT') {
@@ -226,6 +236,7 @@ export function CropDoctorPage({
   const clearImage = () => {
     setImageDataUrl(null);
     setRecord(null);
+    setActiveAutoPlayTurnId(null);
     setError(null);
   };
 
@@ -628,7 +639,11 @@ export function CropDoctorPage({
                         cropDoctorRecordId={record.id}
                         turnId={turn.id}
                         initialSpeed={settings.voiceSpeed}
-                        autoPlay={idx === 1 && Boolean(turn.audioBase64)}
+                        autoPlay={
+                          turn.id === activeAutoPlayTurnId &&
+                          (Boolean(turn.audioBase64 || turn.audioUrl) ||
+                            (turn.ttsProvider === 'browser-fallback' && !turn.ttsError))
+                        }
                         onAudioRecovered={(payload) => {
                           setRecord((prev) =>
                             prev

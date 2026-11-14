@@ -1112,7 +1112,7 @@ export function VoiceAssistantPage({
                         initialSpeed={settings.voiceSpeed}
                         autoPlay={
                           turn.id === activeAutoPlayTurnId &&
-                          (Boolean(turn.audioBase64) ||
+                          (Boolean(turn.audioBase64 || turn.audioUrl) ||
                             (turn.ttsProvider === 'browser-fallback' && !turn.ttsError))
                         }
                         controlsRef={
