@@ -107,6 +107,7 @@ export interface VerifiedProduct {
   sourceLabel: string;
   isBioOrIpm: boolean;
   labelInstruction: string;
+  linkType?: 'product' | 'search';
 }
 
 export interface CropAnalysisResult {
@@ -132,6 +133,7 @@ export interface CropDoctorTurn {
   audioBase64?: string;
   audioMime?: string;
   ttsProvider?: 'gnani-timbre' | 'gemini-fallback' | 'browser-fallback' | 'none';
+  ttsError?: string;
 }
 
 export interface CropDoctorRecord {
@@ -197,11 +199,12 @@ export interface MandiPriceRow {
   maxPrice?: number;
   changePercent: number;
   unit: string;
+  arrivalDate?: string;
   updatedAt: string;
 }
 
 export interface MandiPricesResponse {
-  status: 'live' | 'empty' | 'unavailable' | 'not_configured';
+  status: 'live' | 'cached' | 'empty' | 'unavailable' | 'not_configured';
   errorCode?:
     | 'NOT_CONFIGURED'
     | 'CONNECTION_REFUSED'
@@ -212,6 +215,9 @@ export interface MandiPricesResponse {
     | 'NETWORK_ERROR';
   isDemo: boolean;
   source: string;
+  dataDate?: string;
+  fetchedAt?: string;
+  cachedAt?: string;
   updatedAt: string;
   items: MandiPriceRow[];
   notice: string;

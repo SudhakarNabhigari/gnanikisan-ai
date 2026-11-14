@@ -344,16 +344,20 @@ export function DashboardPage({
   const mandiBadgeLabel =
     mandi.status === 'live'
       ? t.liveAgmarknet
-      : mandi.status === 'empty'
-        ? t.emptyBadge
-        : mandi.status === 'not_configured'
-          ? t.notConfiguredBadge
-          : t.unavailableBadge;
+      : mandi.status === 'cached'
+        ? t.cachedAgmarknet
+        : mandi.status === 'empty'
+          ? t.emptyBadge
+          : mandi.status === 'not_configured'
+            ? t.notConfiguredBadge
+            : t.unavailableBadge;
 
   const mandiBadgeClass =
     mandi.status === 'live'
       ? 'bg-emerald-100 text-emerald-900 dark:bg-emerald-900/60 dark:text-emerald-200'
-      : 'bg-amber-100 text-amber-900 dark:bg-amber-950/70 dark:text-amber-200';
+      : mandi.status === 'cached'
+        ? 'bg-sky-100 text-sky-900 dark:bg-sky-900/60 dark:text-sky-200'
+        : 'bg-amber-100 text-amber-900 dark:bg-amber-950/70 dark:text-amber-200';
 
   return (
     <div className="space-y-5">
@@ -566,72 +570,93 @@ export function DashboardPage({
               {t.showingRatesFor} {mandi.source}
             </p>
 
+            {(mandi.status === 'live' || mandi.status === 'cached') && mandi.items.length > 0 && !mandiLoading && (
+              <>
+                {mandi.status === 'cached' && (
+                  <div className="mt-2.5 rounded-lg border border-sky-200 bg-sky-50/80 px-2.5 py-1.5 text-[11px] text-sky-900 dark:border-sky-800 dark:bg-sky-950/50 dark:text-sky-200">
+                    {t.mandiCachedNotice.replace(
+                      '{date}',
+                      mandi.dataDate || (mandi.cachedAt ? mandi.cachedAt.slice(0, 10) : mandi.updatedAt.slice(0, 10))
+                    )}
+                  </div>
+                )}
+                <div className="mt-3 divide-y divide-slate-100 dark:divide-emerald-900/70">
+                  {mandi.items.map((row, idx) => (
+                    <div
+                      key={`${row.crop}-${row.market}-${idx}`}
+                      className="flex items-start justify-between gap-2 py-2.5"
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-semibold text-[#0D2315] dark:text-white">
+                          {row.crop}
+                          {row.variety ? (
+                            <span className="ml-1 text-[11px] font-normal text-slate-500 dark:text-emerald-300/70">
+                              ({row.variety})
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="truncate text-[11px] text-slate-600 dark:text-emerald-200/75">
+                          {row.market}
+                          {row.state ? `, ${row.state}` : ''}
+                        </div>
+                        <div className="mt-0.5 flex flex-wrap gap-x-2.5 gap-y-0.5 text-[10px] text-slate-500 dark:text-emerald-300/70">
+                          {typeof row.minPrice === 'number' && (
+                            <span className="tabular-nums">
+                              {t.minPriceLabel}: ₹{row.minPrice.toLocaleString('en-IN')}
+                            </span>
+                          )}
+                          {typeof row.maxPrice === 'number' && (
+                            <span className="tabular-nums">
+                              {t.maxPriceLabel}: ₹{row.maxPrice.toLocaleString('en-IN')}
+                            </span>
+                          )}
+                          {(row.arrivalDate || mandi.dataDate) && (
+                            <span>
+                              {t.dataDateLabel}: {row.arrivalDate || mandi.dataDate}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <div className="text-[10px] font-medium text-slate-500 dark:text-emerald-300/70">
+                          {t.modalPriceLabel}
+                        </div>
+                        <div className="font-mono text-sm font-bold text-[#0D2315] tabular-nums dark:text-white">
+                          ₹{row.pricePerQuintal.toLocaleString('en-IN')}
+                        </div>
+                        <div className="text-[10px] text-slate-500 dark:text-emerald-300/70">
+                          {row.unit}
+                        </div>
+                        {row.changePercent !== 0 && (
+                          <div
+                            className={`mt-0.5 inline-flex items-center gap-0.5 font-mono text-[11px] font-semibold tabular-nums ${
+                              row.changePercent > 0
+                                ? 'text-emerald-700 dark:text-emerald-400'
+                                : 'text-red-600 dark:text-red-400'
+                            }`}
+                          >
+                            {row.changePercent > 0 ? (
+                              <TrendingUp className="h-3 w-3" />
+                            ) : (
+                              <TrendingDown className="h-3 w-3" />
+                            )}
+                            {row.changePercent > 0 ? '+' : ''}
+                            {row.changePercent}%
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
             {mandiLoading ? (
               <div className="mt-6 flex min-h-[150px] items-center justify-center gap-2 text-xs text-slate-500 dark:text-emerald-200/80">
                 <Loader2 className="h-4 w-4 animate-spin text-[#16A34A]" />
                 <span>{c.loading}</span>
               </div>
-            ) : mandi.status === 'live' && mandi.items.length > 0 ? (
-              <div className="mt-3.5 divide-y divide-slate-100 dark:divide-emerald-900/70">
-                {mandi.items.map((row, idx) => (
-                  <div
-                    key={`${row.crop}-${row.market}-${idx}`}
-                    className="flex items-start justify-between gap-2 py-2.5"
-                  >
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold text-[#0D2315] dark:text-white">
-                        {row.crop}
-                        {row.variety ? (
-                          <span className="ml-1 text-[11px] font-normal text-slate-500 dark:text-emerald-300/70">
-                            ({row.variety})
-                          </span>
-                        ) : null}
-                      </div>
-                      <div className="truncate text-[11px] text-slate-500 dark:text-emerald-200/70">
-                        {row.market}
-                        {row.state ? `, ${row.state}` : ''}
-                      </div>
-                      <div className="mt-0.5 flex flex-wrap gap-x-2 text-[10px] text-slate-500 dark:text-emerald-300/70">
-                        {typeof row.minPrice === 'number' && typeof row.maxPrice === 'number' && (
-                          <span className="tabular-nums">
-                            {t.minMaxLabel}: ₹{row.minPrice.toLocaleString('en-IN')}–₹
-                            {row.maxPrice.toLocaleString('en-IN')}
-                          </span>
-                        )}
-                        {row.updatedAt && (
-                          <span>
-                            {t.arrivalLabel}: {row.updatedAt}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="shrink-0 text-right">
-                      <div className="font-mono text-sm font-bold text-[#0D2315] tabular-nums dark:text-white">
-                        ₹{row.pricePerQuintal.toLocaleString('en-IN')}
-                        <span className="text-[11px] font-normal text-slate-500">/{row.unit}</span>
-                      </div>
-                      {row.changePercent !== 0 && (
-                        <div
-                          className={`inline-flex items-center gap-0.5 font-mono text-[11px] font-semibold tabular-nums ${
-                            row.changePercent > 0
-                              ? 'text-emerald-700 dark:text-emerald-400'
-                              : 'text-red-600 dark:text-red-400'
-                          }`}
-                        >
-                          {row.changePercent > 0 ? (
-                            <TrendingUp className="h-3 w-3" />
-                          ) : (
-                            <TrendingDown className="h-3 w-3" />
-                          )}
-                          {row.changePercent > 0 ? '+' : ''}
-                          {row.changePercent}%
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : mandi.status === 'empty' ? (
+            ) : (mandi.status === 'live' || mandi.status === 'cached') && mandi.items.length > 0 ? null : mandi.status === 'empty' ? (
               <div className="mt-4 rounded-xl border border-dashed border-emerald-200 bg-[#F7FBF7] p-4 text-xs text-slate-700 dark:border-emerald-800 dark:bg-[#08150D] dark:text-emerald-200/80">
                 <p className="leading-relaxed">{t.noMandiMatch}</p>
                 <button
@@ -678,12 +703,12 @@ export function DashboardPage({
           </div>
 
           <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-600 dark:bg-[#08150D] dark:text-emerald-200/75">
-            {t.updatedLabel}:{' '}
-            {new Date(mandi.updatedAt).toLocaleTimeString(locale, {
+            {t.lastUpdatedLabel}:{' '}
+            {new Date(mandi.fetchedAt || mandi.updatedAt).toLocaleTimeString(locale, {
               hour: '2-digit',
               minute: '2-digit',
-            })}{' '}
-            · {mandi.source}
+            })}
+            {mandi.dataDate ? ` · ${t.dataDateLabel}: ${mandi.dataDate}` : ''} · {mandi.source}
           </div>
         </section>
 

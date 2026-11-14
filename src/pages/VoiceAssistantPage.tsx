@@ -12,9 +12,14 @@ import {
   Zap,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AudioPlayer } from '../components/AudioPlayer';
+import {
+  AudioPlayer,
+  type AudioPlaybackState,
+  type AudioPlayerControls,
+} from '../components/AudioPlayer';
 import { TRANSLATIONS } from '../i18n/translations';
 import { apiFetch } from '../lib/api';
+import { stopAllActiveAudio, unlockAudioPlayback } from '../lib/audioUnlock';
 import type {
   AppLanguage,
   IntegrationsStatus,
@@ -166,6 +171,15 @@ export function VoiceAssistantPage({
   const [typedInput, setTypedInput] = useState('');
   const [waveLevels, setWaveLevels] = useState<number[]>(Array(24).fill(18));
   const [isTtsPlaying, setIsTtsPlaying] = useState(false);
+  const [ttsPlaybackStatus, setTtsPlaybackStatus] = useState<AudioPlaybackState>('idle');
+  const [activeAutoPlayTurnId, setActiveAutoPlayTurnId] = useState<string | null>(null);
+  const [continuousMode, setContinuousMode] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('gk_voice_continuous') === 'true';
+    } catch {
+      return false;
+    }
+  });
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -175,6 +189,14 @@ export function VoiceAssistantPage({
   const audioCtxRef = useRef<AudioContext | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const sentInitialQuestionRef = useRef<string | null>(null);
+  const requestSeqRef = useRef(0);
+  const activeAudioControlsRef = useRef<AudioPlayerControls | null>(null);
+  const continuousTimerRef = useRef<number | null>(null);
+  const continuousModeRef = useRef(continuousMode);
+  continuousModeRef.current = continuousMode;
+  const voiceStateRef = useRef(voiceState);
+  voiceStateRef.current = voiceState;
+  const startRecordingRef = useRef<() => Promise<void>>(async () => {});
 
   const t = TRANSLATIONS[language].voice;
   const c = TRANSLATIONS[language].common;
@@ -205,6 +227,14 @@ export function VoiceAssistantPage({
       .finally(() => onClearInitial());
   }, [initialConversationId, onClearInitial]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem('gk_voice_continuous', String(continuousMode));
+    } catch {
+      // ignore storage errors
+    }
+  }, [continuousMode]);
+
   const sendQuestion = useCallback(
     async (
       questionText: string,
@@ -214,6 +244,17 @@ export function VoiceAssistantPage({
     ) => {
       const clean = String(questionText ?? '').trim();
       if (!clean) return;
+      unlockAudioPlayback();
+      stopAllActiveAudio();
+      if (continuousTimerRef.current) {
+        window.clearTimeout(continuousTimerRef.current);
+        continuousTimerRef.current = null;
+      }
+
+      const seq = ++requestSeqRef.current;
+      setActiveAutoPlayTurnId(null);
+      setTtsPlaybackStatus('idle');
+      setIsTtsPlaying(false);
       setVoiceState('processing');
       setProcessingStage('preparing');
       setStatusError(null);
@@ -240,6 +281,10 @@ export function VoiceAssistantPage({
           }),
         });
 
+        if (seq !== requestSeqRef.current) {
+          return;
+        }
+
         if (res.status === 'unclear') {
           setStatusError(res.message || t.errUnclearSpeech);
           setProcessingStage(null);
@@ -255,10 +300,19 @@ export function VoiceAssistantPage({
         }
         if (res.conversation) {
           setConversation(res.conversation);
+          const turns = res.conversation.turns;
+          const newestTurn = turns[turns.length - 1];
+          if (newestTurn?.role === 'assistant') {
+            setPlayingLanguage(newestTurn.language);
+            setActiveAutoPlayTurnId(newestTurn.id);
+          }
         }
         setProcessingStage(null);
         setVoiceState('ready');
       } catch (err) {
+        if (seq !== requestSeqRef.current) {
+          return;
+        }
         setProcessingStage(null);
         setStatusError(err instanceof Error && err.message ? err.message : t.errAskFailed);
         setVoiceState('error');
@@ -302,16 +356,29 @@ export function VoiceAssistantPage({
 
   useEffect(() => {
     return () => {
+      if (continuousTimerRef.current) {
+        window.clearTimeout(continuousTimerRef.current);
+        continuousTimerRef.current = null;
+      }
       stopMediaResources();
+      stopAllActiveAudio();
     };
   }, [stopMediaResources]);
 
   const startRecording = async () => {
+    unlockAudioPlayback();
+    if (continuousTimerRef.current) {
+      window.clearTimeout(continuousTimerRef.current);
+      continuousTimerRef.current = null;
+    }
     // Self-echo protection: never open microphone while TTS audio is actively playing
-    if (isTtsPlaying) {
+    if (isTtsPlaying || ttsPlaybackStatus === 'playing') {
       setStatusError(t.errEchoLock);
       return;
     }
+    stopAllActiveAudio();
+    setActiveAutoPlayTurnId(null);
+    setTtsPlaybackStatus('idle');
     setStatusError(null);
     setTtsNotice(null);
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
@@ -408,9 +475,13 @@ export function VoiceAssistantPage({
     }
   };
 
+  startRecordingRef.current = startRecording;
+
   const stopAndTranscribe = async () => {
+    unlockAudioPlayback();
     const rec = mediaRecorderRef.current;
     if (!rec) return;
+    const seq = ++requestSeqRef.current;
     const durationCaptured = elapsedSec;
     setVoiceState('processing');
     setProcessingStage('understanding');
@@ -450,6 +521,10 @@ export function VoiceAssistantPage({
         }),
       });
 
+      if (seq !== requestSeqRef.current) {
+        return;
+      }
+
       if (stt?.status === 'unclear') {
         setProcessingStage(null);
         setStatusError(stt.message || t.errUnclearSpeech);
@@ -486,11 +561,16 @@ export function VoiceAssistantPage({
   };
 
   const resetSession = () => {
-    stopMediaResources();
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
+    requestSeqRef.current += 1;
+    if (continuousTimerRef.current) {
+      window.clearTimeout(continuousTimerRef.current);
+      continuousTimerRef.current = null;
     }
+    stopMediaResources();
+    stopAllActiveAudio();
     setIsTtsPlaying(false);
+    setTtsPlaybackStatus('idle');
+    setActiveAutoPlayTurnId(null);
     setPlayingLanguage(null);
     setProcessingStage(null);
     setDetectedLanguage(null);
@@ -500,6 +580,69 @@ export function VoiceAssistantPage({
     setTtsNotice(null);
     setVoiceState('ready');
   };
+
+  const handleStopSpeaking = useCallback(() => {
+    if (continuousTimerRef.current) {
+      window.clearTimeout(continuousTimerRef.current);
+      continuousTimerRef.current = null;
+    }
+    activeAudioControlsRef.current?.stop();
+    stopAllActiveAudio();
+    setIsTtsPlaying(false);
+    setTtsPlaybackStatus('idle');
+    setActiveAutoPlayTurnId(null);
+  }, []);
+
+  const handlePlaybackStateChange = useCallback((state: AudioPlaybackState) => {
+    setTtsPlaybackStatus(state);
+    setIsTtsPlaying(state === 'playing');
+  }, []);
+
+  const handlePlaybackComplete = useCallback(() => {
+    setIsTtsPlaying(false);
+    setTtsPlaybackStatus('idle');
+    setActiveAutoPlayTurnId(null);
+    if (continuousModeRef.current && voiceStateRef.current === 'ready') {
+      if (continuousTimerRef.current) {
+        window.clearTimeout(continuousTimerRef.current);
+      }
+      continuousTimerRef.current = window.setTimeout(() => {
+        continuousTimerRef.current = null;
+        if (continuousModeRef.current && voiceStateRef.current === 'ready') {
+          void startRecordingRef.current();
+        }
+      }, 420);
+    }
+  }, []);
+
+  const handleAudioRecoveredForTurn = useCallback(
+    (
+      turnId: string,
+      payload: { audioBase64: string; audioMime: string; ttsProvider: 'gnani-timbre' | 'gemini-fallback' | 'browser-fallback' | 'none' }
+    ) => {
+      setTtsNotice(null);
+      setActiveAutoPlayTurnId(turnId);
+      setConversation((prev) =>
+        prev
+          ? {
+              ...prev,
+              turns: prev.turns.map((item) =>
+                item.id === turnId
+                  ? {
+                      ...item,
+                      audioBase64: payload.audioBase64,
+                      audioMime: payload.audioMime,
+                      ttsProvider: payload.ttsProvider,
+                      ttsError: undefined,
+                    }
+                  : item
+              ),
+            }
+          : prev
+      );
+    },
+    []
+  );
 
   const handleLanguageButtonClick = (targetLang: AppLanguage) => {
     setVoiceMode((prev) => (prev === targetLang ? 'auto' : targetLang));
@@ -550,9 +693,28 @@ export function VoiceAssistantPage({
           </span>
         </div>
 
-        <span className="text-[11px] text-slate-500 dark:text-emerald-200/70">
-          {t.echoProtectionNote}
-        </span>
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              unlockAudioPlayback();
+              setContinuousMode((v) => !v);
+            }}
+            className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold transition ${
+              continuousMode
+                ? 'border-[#16A34A] bg-[#16A34A] text-white shadow-xs'
+                : 'border-emerald-200 bg-emerald-50/70 text-emerald-900 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-[#08150D] dark:text-emerald-200'
+            }`}
+          >
+            <Mic className="h-3.5 w-3.5" />
+            <span>
+              {t.continuousModeLabel}: {continuousMode ? t.continuousModeOn : t.continuousModeOff}
+            </span>
+          </button>
+          <span className="text-[11px] text-slate-500 dark:text-emerald-200/70">
+            {t.echoProtectionNote}
+          </span>
+        </div>
       </div>
 
       {/* Main Split Stage (Reference Image 2) */}
@@ -721,19 +883,23 @@ export function VoiceAssistantPage({
             {/* State & Timer */}
             <div className="mt-5 text-center">
               <div className="text-base font-bold text-white drop-shadow-xs">
-                {displayState === 'ready' && t.stateReady}
-                {displayState === 'listening' &&
+                {ttsPlaybackStatus === 'playing' &&
+                  t.stateSpeakingLang.replace('{lang}', getLanguageDisplayName(activeSpeakingLang))}
+                {ttsPlaybackStatus === 'paused' && t.stateSpeakingPaused}
+                {ttsPlaybackStatus === 'blocked' && t.autoplayBlockedHint}
+                {ttsPlaybackStatus === 'idle' && displayState === 'ready' && t.stateReady}
+                {ttsPlaybackStatus === 'idle' &&
+                  displayState === 'listening' &&
                   (voiceMode === 'auto' ? t.stateAutoListening : t.stateListening)}
-                {displayState === 'paused' && t.statePaused}
-                {displayState === 'processing' &&
+                {ttsPlaybackStatus === 'idle' && displayState === 'paused' && t.statePaused}
+                {ttsPlaybackStatus === 'idle' &&
+                  displayState === 'processing' &&
                   (processingStage === 'understanding'
                     ? t.stateUnderstanding
                     : processingStage === 'preparing'
                       ? t.statePreparing
                       : t.stateProcessing)}
-                {displayState === 'speaking' &&
-                  t.stateSpeakingLang.replace('{lang}', getLanguageDisplayName(activeSpeakingLang))}
-                {displayState === 'error' && t.stateError}
+                {ttsPlaybackStatus === 'idle' && displayState === 'error' && t.stateError}
               </div>
 
               {(voiceState === 'listening' || voiceState === 'paused') && (
@@ -744,18 +910,67 @@ export function VoiceAssistantPage({
               )}
             </div>
 
-            {/* Recording Control Buttons */}
+            {/* Recording & Speaking Control Buttons */}
             <div className="mt-4 flex flex-wrap items-center justify-center gap-2.5">
-              {(voiceState === 'ready' || voiceState === 'error') && (
+              {ttsPlaybackStatus === 'blocked' && (
                 <button
                   type="button"
-                  onClick={startRecording}
-                  disabled={isTtsPlaying}
-                  className="inline-flex items-center gap-1.5 rounded-xl bg-[#16A34A] px-4 py-2 text-xs font-semibold text-white shadow-md hover:bg-[#15803D] disabled:opacity-50"
+                  onClick={() => {
+                    unlockAudioPlayback();
+                    activeAudioControlsRef.current?.play();
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-[#22C55E] px-4 py-2 text-xs font-bold text-[#052E16] shadow-lg ring-2 ring-white/70 transition hover:bg-[#4ADE80]"
                 >
-                  <Play className="h-3.5 w-3.5" /> {t.startBtn}
+                  <Volume2 className="h-3.5 w-3.5" /> {t.startAudioBtn}
                 </button>
               )}
+
+              {ttsPlaybackStatus === 'playing' && (
+                <button
+                  type="button"
+                  onClick={() => activeAudioControlsRef.current?.pause()}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-white/40 bg-black/50 px-4 py-2 text-xs font-semibold text-white hover:bg-black/70"
+                >
+                  <Pause className="h-3.5 w-3.5" /> {t.pauseSpeakingBtn}
+                </button>
+              )}
+
+              {ttsPlaybackStatus === 'paused' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    unlockAudioPlayback();
+                    activeAudioControlsRef.current?.resume();
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-[#16A34A] px-4 py-2 text-xs font-semibold text-white shadow-md hover:bg-[#15803D]"
+                >
+                  <Play className="h-3.5 w-3.5" /> {t.resumeSpeakingBtn}
+                </button>
+              )}
+
+              {(ttsPlaybackStatus === 'playing' ||
+                ttsPlaybackStatus === 'paused' ||
+                ttsPlaybackStatus === 'blocked') && (
+                <button
+                  type="button"
+                  onClick={handleStopSpeaking}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-red-600 px-4 py-2 text-xs font-semibold text-white shadow-md hover:bg-red-700"
+                >
+                  <Square className="h-3.5 w-3.5 fill-current" /> {t.stopSpeakingBtn}
+                </button>
+              )}
+
+              {(voiceState === 'ready' || voiceState === 'error') &&
+                ttsPlaybackStatus === 'idle' && (
+                  <button
+                    type="button"
+                    onClick={startRecording}
+                    disabled={isTtsPlaying}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-[#16A34A] px-4 py-2 text-xs font-semibold text-white shadow-md hover:bg-[#15803D] disabled:opacity-50"
+                  >
+                    <Play className="h-3.5 w-3.5" /> {t.startBtn}
+                  </button>
+                )}
               {voiceState === 'listening' && (
                 <button
                   type="button"
@@ -902,12 +1117,23 @@ export function VoiceAssistantPage({
                         audioBase64={turn.audioBase64}
                         audioMime={turn.audioMime}
                         ttsProvider={turn.ttsProvider}
+                        ttsError={turn.ttsError}
+                        conversationId={conversation.id}
+                        turnId={turn.id}
                         initialSpeed={settings.voiceSpeed}
-                        autoPlay={isLastAssistant && Boolean(turn.audioBase64)}
-                        onPlayingChange={(playing) => {
-                          setIsTtsPlaying(playing);
-                          setPlayingLanguage(playing ? turn.language : null);
-                        }}
+                        autoPlay={
+                          turn.id === activeAutoPlayTurnId &&
+                          (Boolean(turn.audioBase64) ||
+                            (turn.ttsProvider === 'browser-fallback' && !turn.ttsError))
+                        }
+                        controlsRef={
+                          turn.id === activeAutoPlayTurnId || isLastAssistant
+                            ? activeAudioControlsRef
+                            : undefined
+                        }
+                        onPlaybackStateChange={handlePlaybackStateChange}
+                        onPlaybackComplete={handlePlaybackComplete}
+                        onAudioRecovered={(payload) => handleAudioRecoveredForTurn(turn.id, payload)}
                       />
                     )}
                   </div>

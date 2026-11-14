@@ -66,6 +66,11 @@ export interface TranslationBundle {
     errPasswordMismatch: string;
     errAuthFailed: string;
     errSessionExpired: string;
+    featWeather: string;
+    featCropDoctor: string;
+    featMarketPrices: string;
+    featGovtSchemes: string;
+    orDivider: string;
   };
   locationModal: {
     title: string;
@@ -107,6 +112,16 @@ export interface TranslationBundle {
     downloadAudio: string;
     downloadAudioUnavailable: string;
     downloadAudioSuccess: string;
+    retryAudio: string;
+    retryingAudio: string;
+    audioUnavailable: string;
+    audioLoadError: string;
+    loadingDuration: string;
+    stopAria: string;
+    stopSpeaking: string;
+    resumeAria: string;
+    startAudioBtn: string;
+    autoplayBlockedHint: string;
   };
   dashboard: {
     loadingDashboard: string;
@@ -130,15 +145,22 @@ export interface TranslationBundle {
     updatedLabel: string;
     marketPriceToday: string;
     liveAgmarknet: string;
+    cachedAgmarknet: string;
     notConfiguredBadge: string;
     unavailableBadge: string;
     emptyBadge: string;
     refreshBtn: string;
     showingRatesFor: string;
     minMaxLabel: string;
+    minPriceLabel: string;
+    maxPriceLabel: string;
+    modalPriceLabel: string;
+    dataDateLabel: string;
+    lastUpdatedLabel: string;
     arrivalLabel: string;
     noMandiMatch: string;
     mandiUnavailableTitle: string;
+    mandiCachedNotice: string;
     mandiNotConfiguredDesc: string;
     mandiUnavailableDesc: string;
     mandiRefusedDesc: string;
@@ -265,6 +287,15 @@ export interface TranslationBundle {
     ttsWarningPrefix: string;
     errSttFailed: string;
     errAskFailed: string;
+    continuousModeLabel: string;
+    continuousModeOn: string;
+    continuousModeOff: string;
+    stopSpeakingBtn: string;
+    pauseSpeakingBtn: string;
+    resumeSpeakingBtn: string;
+    startAudioBtn: string;
+    autoplayBlockedHint: string;
+    stateSpeakingPaused: string;
   };
   cropDoctor: {
     title: string;
@@ -311,6 +342,8 @@ export interface TranslationBundle {
     priceLabel: string;
     checkDealerPrice: string;
     sourceBtn: string;
+    viewProductBtn: string;
+    searchProductBtn: string;
     careTipsTitle: string;
     preventionTipsTitle: string;
     errUnsupportedFormat: string;
@@ -319,6 +352,11 @@ export interface TranslationBundle {
     errUploadFirst: string;
     errAnalyzeFail: string;
     errFollowUpFail: string;
+    errTimeout: string;
+    errInvalidResponse: string;
+    retryAnalyzeBtn: string;
+    analyzingConversationHint: string;
+    analyzingSubHint: string;
   };
   profile: {
     title: string;
@@ -388,6 +426,8 @@ export interface TranslationBundle {
     preventionTipsTitle: string;
     verifiedProductsTitle: string;
     sourceBtn: string;
+    viewProductBtn: string;
+    searchProductBtn: string;
     youLabel: string;
     doctorAiLabel: string;
     continueBtn: string;
@@ -534,6 +574,11 @@ export const TRANSLATIONS: Record<AppLanguage, TranslationBundle> = {
       errPasswordMismatch: 'Passwords do not match.',
       errAuthFailed: 'Authentication failed.',
       errSessionExpired: 'Your login session expired. Please sign in again to save your farm location.',
+      featWeather: 'Live Weather',
+      featCropDoctor: 'Crop Doctor',
+      featMarketPrices: 'Market Prices',
+      featGovtSchemes: 'Govt. Schemes',
+      orDivider: 'or',
     },
     locationModal: {
       title: 'Set Your Farm Location',
@@ -575,6 +620,16 @@ export const TRANSLATIONS: Record<AppLanguage, TranslationBundle> = {
       downloadAudio: 'Download Audio',
       downloadAudioUnavailable: 'Audio file unavailable for this response',
       downloadAudioSuccess: 'Audio downloaded',
+      retryAudio: 'Retry Audio',
+      retryingAudio: 'Generating audio...',
+      audioUnavailable: 'Audio unavailable right now — read the text reply above or click Retry Audio.',
+      audioLoadError: 'Could not play audio file. Click Retry Audio to regenerate.',
+      loadingDuration: 'Loading...',
+      stopAria: 'Stop speaking',
+      stopSpeaking: 'Stop',
+      resumeAria: 'Resume playback',
+      startAudioBtn: 'Start Audio',
+      autoplayBlockedHint: 'Browser blocked automatic audio — click Start Audio once to enable playback.',
     },
     dashboard: {
       loadingDashboard: 'Loading your farm dashboard...',
@@ -598,15 +653,22 @@ export const TRANSLATIONS: Record<AppLanguage, TranslationBundle> = {
       updatedLabel: 'Updated',
       marketPriceToday: 'Market Price Today',
       liveAgmarknet: 'Live AGMARKNET',
+      cachedAgmarknet: 'Cached AGMARKNET',
       notConfiguredBadge: 'Not Configured',
       unavailableBadge: 'Unavailable',
       emptyBadge: 'No Arrivals',
       refreshBtn: 'Refresh',
       showingRatesFor: 'Selected crops · Source:',
       minMaxLabel: 'Min–Max',
-      arrivalLabel: 'Updated',
+      minPriceLabel: 'Min',
+      maxPriceLabel: 'Max',
+      modalPriceLabel: 'Modal',
+      dataDateLabel: 'Data date',
+      lastUpdatedLabel: 'Last updated',
+      arrivalLabel: 'Data date',
       noMandiMatch: 'No live AGMARKNET mandi arrivals matched your selected crops in the latest feed.',
       mandiUnavailableTitle: 'Live mandi prices currently unavailable',
+      mandiCachedNotice: 'Live AGMARKNET is currently unreachable. Showing last verified cached prices from {date}.',
       mandiNotConfiguredDesc: 'DATA_GOV_API_KEY is not configured on the server. Add it to load live AGMARKNET rates.',
       mandiUnavailableDesc: 'Could not retrieve live AGMARKNET prices from data.gov.in right now. No fabricated prices are shown.',
       mandiRefusedDesc: 'The official AGMARKNET server (api.data.gov.in) refused outbound connections from this hosting environment. No fabricated prices are shown.',
@@ -766,6 +828,15 @@ export const TRANSLATIONS: Record<AppLanguage, TranslationBundle> = {
       ttsWarningPrefix: 'Voice audio could not be generated; showing text reply.',
       errSttFailed: 'Speech recognition failed. Please try again or type your question.',
       errAskFailed: 'Assistant request failed.',
+      continuousModeLabel: 'Continuous Conversation',
+      continuousModeOn: 'ON',
+      continuousModeOff: 'OFF',
+      stopSpeakingBtn: 'Stop Speaking',
+      pauseSpeakingBtn: 'Pause Audio',
+      resumeSpeakingBtn: 'Resume Audio',
+      startAudioBtn: 'Start Audio',
+      autoplayBlockedHint: 'Your browser paused automatic playback. Tap Start Audio to play the response.',
+      stateSpeakingPaused: 'Playback paused',
     },
     cropDoctor: {
       title: 'Crop Doctor AI',
@@ -812,6 +883,8 @@ export const TRANSLATIONS: Record<AppLanguage, TranslationBundle> = {
       priceLabel: 'Price',
       checkDealerPrice: 'Check verified dealer (not fabricated)',
       sourceBtn: 'Source',
+      viewProductBtn: 'View Product',
+      searchProductBtn: 'Search product',
       careTipsTitle: 'Care Tips',
       preventionTipsTitle: 'Prevention Tips',
       errUnsupportedFormat: 'Unsupported format. Please upload a JPG, PNG, or WEBP image.',
@@ -820,6 +893,11 @@ export const TRANSLATIONS: Record<AppLanguage, TranslationBundle> = {
       errUploadFirst: 'Please upload or capture a crop/leaf photo first.',
       errAnalyzeFail: 'Unable to analyze crop image.',
       errFollowUpFail: 'Failed to send follow-up question.',
+      errTimeout: 'Analysis took too long and timed out. Please check your connection and try again.',
+      errInvalidResponse: 'Received an incomplete analysis from the server. Please try again.',
+      retryAnalyzeBtn: 'Retry Analysis',
+      analyzingConversationHint: 'Inspecting visible crop symptoms in English...',
+      analyzingSubHint: 'Analyzing photo, preparing care guidance, and generating voice playback.',
     },
     profile: {
       title: 'My Profile',
@@ -889,6 +967,8 @@ export const TRANSLATIONS: Record<AppLanguage, TranslationBundle> = {
       preventionTipsTitle: 'Prevention Tips',
       verifiedProductsTitle: 'Referenced Verified Products',
       sourceBtn: 'Source',
+      viewProductBtn: 'View Product',
+      searchProductBtn: 'Search product',
       youLabel: 'You',
       doctorAiLabel: 'GnaniCrop Doctor AI',
       continueBtn: 'Continue Conversation',
@@ -1054,6 +1134,11 @@ export const TRANSLATIONS: Record<AppLanguage, TranslationBundle> = {
       errPasswordMismatch: 'పాస్‌వర్డ్‌లు సరిపోలలేదు.',
       errAuthFailed: 'లాగిన్ విఫలమైంది.',
       errSessionExpired: 'మీ లాగిన్ సెషన్ గడువు ముగిసింది. పొలం లొకేషన్ సేవ్ చేయడానికి దయచేసి మళ్లీ సైన్ ఇన్ చేయండి.',
+      featWeather: 'లైవ్ వాతావరణం',
+      featCropDoctor: 'క్రాప్ డాక్టర్',
+      featMarketPrices: 'మార్కెట్ ధరలు',
+      featGovtSchemes: 'ప్రభుత్వ పథకాలు',
+      orDivider: 'లేదా',
     },
     locationModal: {
       title: 'మీ పొలం లొకేషన్ సెట్ చేయండి',
@@ -1095,6 +1180,16 @@ export const TRANSLATIONS: Record<AppLanguage, TranslationBundle> = {
       downloadAudio: 'ఆడియో డౌన్‌లోడ్',
       downloadAudioUnavailable: 'ఈ సమాధానానికి ఆడియో ఫైల్ అందుబాటులో లేదు',
       downloadAudioSuccess: 'ఆడియో డౌన్‌లోడ్ అయింది',
+      retryAudio: 'ఆడియో మళ్లీ ప్రయత్నించండి',
+      retryingAudio: 'ఆడియో తయారవుతోంది...',
+      audioUnavailable: 'ఆడియో ప్రస్తుతం అందుబాటులో లేదు — పై సమాధానం చదవండి లేదా ఆడియో మళ్లీ ప్రయత్నించండి నొక్కండి.',
+      audioLoadError: 'ఆడియో ప్లే చేయడం సాధ్యం కాలేదు. ఆడియో మళ్లీ ప్రయత్నించండి నొక్కండి.',
+      loadingDuration: 'లోడ్ అవుతోంది...',
+      stopAria: 'మాట్లాడటం ఆపండి',
+      stopSpeaking: 'ఆపండి',
+      resumeAria: 'తిరిగి ప్లే చేయండి',
+      startAudioBtn: 'ఆడియో ప్రారంభించండి',
+      autoplayBlockedHint: 'బ్రౌజర్ ఆటో ప్లేను నిరోధించింది — ఆడియో వినడానికి ప్రారంభించండి నొక్కండి.',
     },
     dashboard: {
       loadingDashboard: 'మీ పొలం డ్యాష్‌బోర్డ్ లోడ్ అవుతోంది...',
@@ -1118,15 +1213,22 @@ export const TRANSLATIONS: Record<AppLanguage, TranslationBundle> = {
       updatedLabel: 'నవీకరణ',
       marketPriceToday: 'నేటి మార్కెట్ ధరలు',
       liveAgmarknet: 'లైవ్ AGMARKNET',
+      cachedAgmarknet: 'కాష్ చేసిన AGMARKNET',
       notConfiguredBadge: 'సెట్ చేయబడలేదు',
       unavailableBadge: 'అందుబాటులో లేదు',
       emptyBadge: 'ధరలు లేవు',
       refreshBtn: 'రిఫ్రెష్',
       showingRatesFor: 'ఎంచుకున్న పంటలు · మూలం:',
       minMaxLabel: 'కనిష్ట–గరిష్ట',
-      arrivalLabel: 'తేదీ',
+      minPriceLabel: 'కనిష్ట',
+      maxPriceLabel: 'గరిష్ట',
+      modalPriceLabel: 'మోడల్',
+      dataDateLabel: 'డేటా తేదీ',
+      lastUpdatedLabel: 'చివరి నవీకరణ',
+      arrivalLabel: 'డేటా తేదీ',
       noMandiMatch: 'తాజా AGMARKNET ఫీడ్‌లో మీరు ఎంచుకున్న పంటలకు ధరలు కనిపించలేదు.',
       mandiUnavailableTitle: 'లైవ్ మండి ధరలు ప్రస్తుతం అందుబాటులో లేవు',
+      mandiCachedNotice: 'ప్రస్తుతం లైవ్ AGMARKNET అందుబాటులో లేదు. {date} నాటి చివరి ధృవీకరించబడిన ధరలు చూపబడుతున్నాయి.',
       mandiNotConfiguredDesc: 'సర్వర్‌లో DATA_GOV_API_KEY సెట్ చేయబడలేదు. లైవ్ AGMARKNET ధరల కోసం API కీ జతచేయండి.',
       mandiUnavailableDesc: 'ప్రస్తుతం data.gov.in నుండి లైవ్ AGMARKNET ధరలను పొందలేకపోయాము. తప్పుడు ధరలు చూపబడవు.',
       mandiRefusedDesc: 'ఈ హోస్టింగ్ సర్వర్ నుండి అధికారిక AGMARKNET (api.data.gov.in) కనెక్షన్ నిరాకరించబడింది. తప్పుడు ధరలు చూపబడవు.',
@@ -1286,6 +1388,15 @@ export const TRANSLATIONS: Record<AppLanguage, TranslationBundle> = {
       ttsWarningPrefix: 'వాయిస్ ఆడియో రూపొందించబడలేదు; టెక్స్ట్ సమాధానం చూపబడింది.',
       errSttFailed: 'వాయిస్ గుర్తింపు విఫలమైంది. మళ్లీ ప్రయత్నించండి లేదా టైప్ చేయండి.',
       errAskFailed: 'సహాయకుడి సమాధానం పొందడం విఫలమైంది.',
+      continuousModeLabel: 'నిరంతర సంభాషణ',
+      continuousModeOn: 'ఆన్',
+      continuousModeOff: 'ఆఫ్',
+      stopSpeakingBtn: 'మాట్లాడటం ఆపండి',
+      pauseSpeakingBtn: 'ఆడియో విరామం',
+      resumeSpeakingBtn: 'ఆడియో కొనసాగించండి',
+      startAudioBtn: 'ఆడియో ప్రారంభించండి',
+      autoplayBlockedHint: 'బ్రౌజర్ ఆటోమేటిక్ ఆడియోను ఆపింది. సమాధానం వినడానికి ఆడియో ప్రారంభించండి నొక్కండి.',
+      stateSpeakingPaused: 'ఆడియో విరామంలో ఉంది',
     },
     cropDoctor: {
       title: 'క్రాప్ డాక్టర్ AI',
@@ -1332,6 +1443,8 @@ export const TRANSLATIONS: Record<AppLanguage, TranslationBundle> = {
       priceLabel: 'ధర',
       checkDealerPrice: 'ధృవీకరించబడిన డీలర్ వద్ద నిర్ధారించండి',
       sourceBtn: 'మూలం',
+      viewProductBtn: 'ఉత్పత్తి చూడండి',
+      searchProductBtn: 'ఉత్పత్తిని శోధించండి',
       careTipsTitle: 'సంరక్షణ సూచనలు',
       preventionTipsTitle: 'నివారణ సూచనలు',
       errUnsupportedFormat: 'సపోర్ట్ లేని ఫార్మాట్. దయచేసి JPG, PNG లేదా WEBP ఫోటో అప్‌లోడ్ చేయండి.',
@@ -1340,6 +1453,11 @@ export const TRANSLATIONS: Record<AppLanguage, TranslationBundle> = {
       errUploadFirst: 'దయచేసి ముందుగా పంట లేదా ఆకు ఫోటో అప్‌లోడ్ చేయండి.',
       errAnalyzeFail: 'పంట ఫోటోను విశ్లేషించడం సాధ్యం కాలేదు.',
       errFollowUpFail: 'తదుపరి ప్రశ్న పంపడం విఫలమైంది.',
+      errTimeout: 'విశ్లేషణకు ఎక్కువ సమయం పట్టింది. దయచేసి మీ ఇంటర్నెట్ కనెక్షన్ తనిఖీ చేసి మళ్లీ ప్రయత్నించండి.',
+      errInvalidResponse: 'సర్వర్ నుండి అసంపూర్తి విశ్లేషణ అందింది. దయచేసి మళ్లీ ప్రయత్నించండి.',
+      retryAnalyzeBtn: 'మళ్లీ విశ్లేషించండి',
+      analyzingConversationHint: 'తెలుగులో పంట ఫోటో లక్షణాలను పరిశీలిస్తోంది...',
+      analyzingSubHint: 'ఫోటో విశ్లేషణ, సంరక్షణ సూచనలు మరియు వాయిస్ ఆడియో రూపొందించబడుతోంది.',
     },
     profile: {
       title: 'నా ప్రొఫైల్',
@@ -1409,6 +1527,8 @@ export const TRANSLATIONS: Record<AppLanguage, TranslationBundle> = {
       preventionTipsTitle: 'నివారణ సూచనలు',
       verifiedProductsTitle: 'సూచించిన ధృవీకరించబడిన ఉత్పత్తులు',
       sourceBtn: 'మూలం',
+      viewProductBtn: 'ఉత్పత్తి చూడండి',
+      searchProductBtn: 'ఉత్పత్తిని శోధించండి',
       youLabel: 'మీరు',
       doctorAiLabel: 'GnaniCrop డాక్టర్ AI',
       continueBtn: 'సంభాషణ కొనసాగించండి',
@@ -1574,6 +1694,11 @@ export const TRANSLATIONS: Record<AppLanguage, TranslationBundle> = {
       errPasswordMismatch: 'पासवर्ड मेल नहीं खाते।',
       errAuthFailed: 'प्रमाणीकरण विफल रहा।',
       errSessionExpired: 'आपका लॉगिन सत्र समाप्त हो गया है। स्थान सहेजने के लिए कृपया दोबारा साइन इन करें।',
+      featWeather: 'लाइव मौसम',
+      featCropDoctor: 'क्रॉप डॉक्टर',
+      featMarketPrices: 'मंडी भाव',
+      featGovtSchemes: 'सरकारी योजनाएं',
+      orDivider: 'या',
     },
     locationModal: {
       title: 'अपने खेत का स्थान सेट करें',
@@ -1615,6 +1740,16 @@ export const TRANSLATIONS: Record<AppLanguage, TranslationBundle> = {
       downloadAudio: 'ऑडियो डाउनलोड',
       downloadAudioUnavailable: 'इस उत्तर के लिए ऑडियो फ़ाइल उपलब्ध नहीं है',
       downloadAudioSuccess: 'ऑडियो डाउनलोड हो गया',
+      retryAudio: 'ऑडियो पुनः प्रयास करें',
+      retryingAudio: 'ऑडियो बन रहा है...',
+      audioUnavailable: 'ऑडियो अभी उपलब्ध नहीं है — आप ऊपर उत्तर पढ़ सकते हैं या ऑडियो पुनः प्रयास करें दबा सकते हैं।',
+      audioLoadError: 'ऑडियो चलाने में त्रुटि हुई। पुनः प्रयास करें पर क्लिक करें।',
+      loadingDuration: 'लोड हो रहा है...',
+      stopAria: 'बोलना बंद करें',
+      stopSpeaking: 'रोकें',
+      resumeAria: 'फिर से चलाएं',
+      startAudioBtn: 'ऑडियो शुरू करें',
+      autoplayBlockedHint: 'ब्राउज़र ने ऑटो-प्ले रोक दिया है — सुनने के लिए ऑडियो शुरू करें दबाएं।',
     },
     dashboard: {
       loadingDashboard: 'आपका कृषि डैशबोर्ड लोड हो रहा है...',
@@ -1638,15 +1773,22 @@ export const TRANSLATIONS: Record<AppLanguage, TranslationBundle> = {
       updatedLabel: 'अपडेटेड',
       marketPriceToday: 'आज का मंडी भाव',
       liveAgmarknet: 'लाइव AGMARKNET',
+      cachedAgmarknet: 'कैश्ड AGMARKNET',
       notConfiguredBadge: 'सेट नहीं है',
       unavailableBadge: 'उपलब्ध नहीं',
       emptyBadge: 'कोई आवक नहीं',
       refreshBtn: 'रीफ़्रेश करें',
       showingRatesFor: 'चयनित फसलें · स्रोत:',
       minMaxLabel: 'न्यूनतम–अधिकतम',
-      arrivalLabel: 'दिनांक',
+      minPriceLabel: 'न्यूनतम',
+      maxPriceLabel: 'अधिकतम',
+      modalPriceLabel: 'मॉडल',
+      dataDateLabel: 'डेटा दिनांक',
+      lastUpdatedLabel: 'अंतिम अपडेट',
+      arrivalLabel: 'डेटा दिनांक',
       noMandiMatch: 'नवीनतम AGMARKNET फ़ीड में आपकी चयनित फसलों के लिए कोई मंडी भाव नहीं मिला।',
       mandiUnavailableTitle: 'लाइव मंडी भाव अभी उपलब्ध नहीं हैं',
+      mandiCachedNotice: 'लाइव AGMARKNET अभी उपलब्ध नहीं है। {date} के अंतिम सत्यापित भाव दिखाए जा रहे हैं।',
       mandiNotConfiguredDesc: 'सर्वर पर DATA_GOV_API_KEY कॉन्फ़िगर नहीं है। लाइव मंडी भाव के लिए API कुंजी जोड़ें।',
       mandiUnavailableDesc: 'अभी data.gov.in से लाइव AGMARKNET भाव प्राप्त नहीं हो सके। कोई काल्पनिक भाव नहीं दिखाया जा रहा है।',
       mandiRefusedDesc: 'आधिकारिक AGMARKNET सर्वर (api.data.gov.in) ने इस होस्टिंग नेटवर्क से कनेक्शन अस्वीकार कर दिया। कोई काल्पनिक भाव नहीं दिखाया गया है।',
@@ -1806,6 +1948,15 @@ export const TRANSLATIONS: Record<AppLanguage, TranslationBundle> = {
       ttsWarningPrefix: 'आवाज़ ऑडियो तैयार नहीं हो सका; लिखित उत्तर दिखाया जा रहा है।',
       errSttFailed: 'आवाज़ पहचान विफल रही। कृपया पुनः प्रयास करें या टाइप करें।',
       errAskFailed: 'सहायक से उत्तर प्राप्त नहीं हो सका।',
+      continuousModeLabel: 'निरंतर बातचीत',
+      continuousModeOn: 'चालू',
+      continuousModeOff: 'बंद',
+      stopSpeakingBtn: 'बोलना बंद करें',
+      pauseSpeakingBtn: 'ऑडियो रोकें',
+      resumeSpeakingBtn: 'ऑडियो जारी रखें',
+      startAudioBtn: 'ऑडियो शुरू करें',
+      autoplayBlockedHint: 'ब्राउज़र ने स्वचालित ऑडियो रोक दिया है। उत्तर सुनने के लिए ऑडियो शुरू करें दबाएं।',
+      stateSpeakingPaused: 'ऑडियो रुका हुआ है',
     },
     cropDoctor: {
       title: 'क्रॉप डॉक्टर AI',
@@ -1852,6 +2003,8 @@ export const TRANSLATIONS: Record<AppLanguage, TranslationBundle> = {
       priceLabel: 'कीमत',
       checkDealerPrice: 'सत्यापित विक्रेता से जांचें',
       sourceBtn: 'स्रोत',
+      viewProductBtn: 'उत्पाद देखें',
+      searchProductBtn: 'उत्पाद खोजें',
       careTipsTitle: 'देखभाल के उपाय',
       preventionTipsTitle: 'रोकथाम के उपाय',
       errUnsupportedFormat: 'असमर्थित फ़ॉर्मैट। कृपया JPG, PNG या WEBP फ़ोटो अपलोड करें।',
@@ -1860,6 +2013,11 @@ export const TRANSLATIONS: Record<AppLanguage, TranslationBundle> = {
       errUploadFirst: 'कृपया पहले फसल या पत्ती की फ़ोटो अपलोड करें।',
       errAnalyzeFail: 'फसल की फ़ोटो का विश्लेषण नहीं हो सका।',
       errFollowUpFail: 'अगला प्रश्न भेजने में विफल।',
+      errTimeout: 'विश्लेषण में अधिक समय लगा और अनुरोध समाप्त हो गया। कृपया पुनः प्रयास करें।',
+      errInvalidResponse: 'सर्वर से अधूरा विश्लेषण प्राप्त हुआ। कृपया पुनः प्रयास करें।',
+      retryAnalyzeBtn: 'पुनः जांच करें',
+      analyzingConversationHint: 'हिन्दी में फसल के लक्षणों की जांच हो रही है...',
+      analyzingSubHint: 'फ़ोटो का विश्लेषण, देखभाल के उपाय और वॉइस ऑडियो तैयार किया जा रहा है।',
     },
     profile: {
       title: 'मेरी प्रोफ़ाइल',
@@ -1929,6 +2087,8 @@ export const TRANSLATIONS: Record<AppLanguage, TranslationBundle> = {
       preventionTipsTitle: 'रोकथाम के उपाय',
       verifiedProductsTitle: 'संदर्भित सत्यापित उत्पाद',
       sourceBtn: 'स्रोत',
+      viewProductBtn: 'उत्पाद देखें',
+      searchProductBtn: 'उत्पाद खोजें',
       youLabel: 'आप',
       doctorAiLabel: 'GnaniCrop डॉक्टर AI',
       continueBtn: 'बातचीत जारी रखें',

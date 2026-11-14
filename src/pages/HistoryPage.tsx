@@ -486,7 +486,32 @@ export function HistoryPage({
                           audioBase64={turn.audioBase64}
                           audioMime={turn.audioMime}
                           ttsProvider={turn.ttsProvider}
+                          ttsError={turn.ttsError}
+                          conversationId={activeVoice.id}
+                          turnId={turn.id}
                           initialSpeed={settings.voiceSpeed}
+                          onAudioRecovered={(payload) => {
+                            setVoiceHistory((prev) =>
+                              prev.map((conv) =>
+                                conv.id === activeVoice.id
+                                  ? {
+                                      ...conv,
+                                      turns: conv.turns.map((item) =>
+                                        item.id === turn.id
+                                          ? {
+                                              ...item,
+                                              audioBase64: payload.audioBase64,
+                                              audioMime: payload.audioMime,
+                                              ttsProvider: payload.ttsProvider,
+                                              ttsError: undefined,
+                                            }
+                                          : item
+                                      ),
+                                    }
+                                  : conv
+                              )
+                            );
+                          }}
                         />
                       )}
                     </div>
@@ -682,7 +707,8 @@ export function HistoryPage({
                             rel="noopener noreferrer"
                             className="inline-flex items-center gap-1 font-semibold text-[#15803D] hover:underline dark:text-emerald-300"
                           >
-                            {t.sourceBtn} <ExternalLink className="h-3 w-3" />
+                            {p.linkType === 'search' ? t.searchProductBtn : t.viewProductBtn}{' '}
+                            <ExternalLink className="h-3 w-3" />
                           </a>
                         </div>
                       ))}
@@ -713,7 +739,32 @@ export function HistoryPage({
                           audioBase64={turn.audioBase64}
                           audioMime={turn.audioMime}
                           ttsProvider={turn.ttsProvider}
+                          ttsError={turn.ttsError}
+                          cropDoctorRecordId={activeCrop.id}
+                          turnId={turn.id}
                           initialSpeed={settings.voiceSpeed}
+                          onAudioRecovered={(payload) => {
+                            setCropHistory((prev) =>
+                              prev.map((rec) =>
+                                rec.id === activeCrop.id
+                                  ? {
+                                      ...rec,
+                                      turns: rec.turns.map((item) =>
+                                        item.id === turn.id
+                                          ? {
+                                              ...item,
+                                              audioBase64: payload.audioBase64,
+                                              audioMime: payload.audioMime,
+                                              ttsProvider: payload.ttsProvider,
+                                              ttsError: undefined,
+                                            }
+                                          : item
+                                      ),
+                                    }
+                                  : rec
+                              )
+                            );
+                          }}
                         />
                       )}
                     </div>

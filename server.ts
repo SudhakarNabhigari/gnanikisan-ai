@@ -144,11 +144,14 @@ async function synthesizeBestAvailableTts(params: {
         voice: params.voice,
         speed: params.speed,
       });
-      return {
-        audioBase64: gnani.audioBase64,
-        audioMime: gnani.audioMime,
-        ttsProvider: 'gnani-timbre',
-      };
+      if (gnani.audioBase64 && gnani.audioBase64.trim().length >= 32) {
+        return {
+          audioBase64: gnani.audioBase64,
+          audioMime: gnani.audioMime || 'audio/mpeg',
+          ttsProvider: 'gnani-timbre',
+        };
+      }
+      errors.push('Gnani Timbre TTS: returned empty audio payload.');
     } catch (err) {
       const msg = (err as Error).message;
       errors.push(`Gnani Timbre TTS: ${msg}`);
@@ -158,11 +161,14 @@ async function synthesizeBestAvailableTts(params: {
   if (isGeminiConfigured()) {
     try {
       const gem = await synthesizeSpeechWithGeminiFallback(params.text);
-      return {
-        audioBase64: gem.audioBase64,
-        audioMime: gem.audioMime,
-        ttsProvider: 'gemini-fallback',
-      };
+      if (gem.audioBase64 && gem.audioBase64.trim().length >= 32) {
+        return {
+          audioBase64: gem.audioBase64,
+          audioMime: gem.audioMime || 'audio/wav',
+          ttsProvider: 'gemini-fallback',
+        };
+      }
+      errors.push('Gemini TTS: returned empty audio payload.');
     } catch (err) {
       const msg = (err as Error).message;
       errors.push(`Gemini TTS: ${msg}`);
@@ -856,19 +862,69 @@ async function createServer() {
   });
 
   app.post('/api/voice/tts', requireAuth, async (req: AuthedRequest, res) => {
-    const { text, language } = req.body as { text?: string; language?: AppLanguage };
+    const userId = req.userId!;
+    const { text, language, conversationId, cropDoctorRecordId, turnId } = req.body as {
+      text?: string;
+      language?: AppLanguage;
+      conversationId?: string;
+      cropDoctorRecordId?: string;
+      turnId?: string;
+    };
     if (!text?.trim()) {
       res.status(400).json({ error: 'Text is required for speech synthesis.' });
       return;
     }
     const lang: AppLanguage = language === 'te' || language === 'hi' ? language : 'en';
-    const settings = store.getSettings(req.userId!);
+    const settings = store.getSettings(userId);
     const ttsResult = await synthesizeBestAvailableTts({
       text: text.trim(),
       language: lang,
       voice: settings.voiceName,
       speed: settings.voiceSpeed,
     });
+
+    if (!ttsResult.audioBase64) {
+      res.status(ttsResult.ttsProvider === 'browser-fallback' ? 503 : 502).json({
+        error: ttsResult.ttsError || 'Speech audio service is unavailable right now.',
+        ...ttsResult,
+      });
+      return;
+    }
+
+    if (turnId && conversationId) {
+      const existing = store.getVoiceHistory(userId).find((v) => v.id === conversationId);
+      if (existing) {
+        const updatedTurns = existing.turns.map((turn) =>
+          turn.id === turnId
+            ? {
+                ...turn,
+                audioBase64: ttsResult.audioBase64,
+                audioMime: ttsResult.audioMime,
+                ttsProvider: ttsResult.ttsProvider,
+                ttsError: undefined,
+              }
+            : turn
+        );
+        store.upsertVoiceConversation(userId, { ...existing, turns: updatedTurns });
+      }
+    } else if (turnId && cropDoctorRecordId) {
+      const existing = store.getCropDoctorHistory(userId).find((r) => r.id === cropDoctorRecordId);
+      if (existing) {
+        const updatedTurns = existing.turns.map((turn) =>
+          turn.id === turnId
+            ? {
+                ...turn,
+                audioBase64: ttsResult.audioBase64,
+                audioMime: ttsResult.audioMime,
+                ttsProvider: ttsResult.ttsProvider,
+                ttsError: undefined,
+              }
+            : turn
+        );
+        store.upsertCropDoctorRecord(userId, { ...existing, turns: updatedTurns });
+      }
+    }
+
     res.json(ttsResult);
   });
 
@@ -890,6 +946,8 @@ async function createServer() {
       question?: string;
       language?: AppLanguage;
     };
+
+    const lang: AppLanguage = language === 'te' || language === 'hi' ? language : 'en';
 
     if (!imageDataUrl || !imageDataUrl.startsWith('data:image/')) {
       res.status(400).json({ error: 'Please upload a valid JPG, PNG, or WEBP crop image.' });
@@ -913,19 +971,20 @@ async function createServer() {
     if (!isGeminiConfigured()) {
       res.status(503).json({
         error: 'Vision analysis service (GEMINI_API_KEY) is not configured on the server.',
+        code: 'VISION_NOT_CONFIGURED',
       });
       return;
     }
 
-    const lang: AppLanguage = language === 'te' || language === 'hi' ? language : 'en';
     const user = store.getUserById(userId)!;
     const settings = store.getSettings(userId);
+    const cleanCrop = cropName?.trim();
 
     try {
       const analysis = await analyzeCropImage({
         imageBase64: base64,
         mimeType,
-        cropName: cropName?.trim(),
+        cropName: cleanCrop,
         location: location?.trim() || user.location?.name,
         growthStage: growthStage?.trim(),
         question: question?.trim(),
@@ -933,17 +992,32 @@ async function createServer() {
       });
 
       const summaryVoiceText = `${analysis.possibleIssue}. ${analysis.explanation} ${analysis.confidenceNote}`;
-      const ttsResult = await synthesizeBestAvailableTts({
-        text: summaryVoiceText,
-        language: lang,
-        voice: settings.voiceName,
-        speed: settings.voiceSpeed,
-      });
+      let ttsResult: Awaited<ReturnType<typeof synthesizeBestAvailableTts>> = {
+        ttsProvider: 'browser-fallback',
+      };
+      try {
+        ttsResult = await synthesizeBestAvailableTts({
+          text: summaryVoiceText,
+          language: lang,
+          voice: settings.voiceName,
+          speed: settings.voiceSpeed,
+        });
+      } catch (ttsErr) {
+        console.warn('Crop Doctor TTS warning:', ttsErr instanceof Error ? ttsErr.message : ttsErr);
+      }
 
       const now = new Date().toISOString();
-      const userQuestion =
-        question?.trim() ||
-        `Please inspect this ${cropName?.trim() || 'crop'} photo and advise safe management.`;
+      const defaultPromptByLang: Record<AppLanguage, string> = {
+        te: cleanCrop
+          ? `దయచేసి ఈ ${cleanCrop} పంట ఫోటోను పరిశీలించి సురక్షిత యాజమాన్య సూచనలు ఇవ్వండి.`
+          : 'దయచేసి ఈ పంట ఫోటోను పరిశీలించి సురక్షిత యాజమాన్య సూచనలు ఇవ్వండి.',
+        hi: cleanCrop
+          ? `कृपया इस ${cleanCrop} फसल की फ़ोटो की जांच करें और सुरक्षित देखभाल की सलाह दें।`
+          : 'कृपया इस फसल की फ़ोटो की जांच करें और सुरक्षित देखभाल की सलाह दें।',
+        en: `Please inspect this ${cleanCrop || 'crop'} photo and advise safe management.`,
+      };
+
+      const userQuestion = question?.trim() || defaultPromptByLang[lang];
 
       const turns: CropDoctorTurn[] = [
         {
@@ -960,6 +1034,7 @@ async function createServer() {
           audioBase64: ttsResult.audioBase64,
           audioMime: ttsResult.audioMime,
           ttsProvider: ttsResult.ttsProvider,
+          ttsError: ttsResult.ttsError,
         },
       ];
 
@@ -978,8 +1053,18 @@ async function createServer() {
       store.upsertCropDoctorRecord(userId, record);
       res.json({ record });
     } catch (err) {
-      res.status(502).json({
-        error: err instanceof Error ? err.message : 'Crop image analysis failed.',
+      const message = err instanceof Error ? err.message : 'Crop image analysis failed.';
+      const lower = message.toLowerCase();
+      console.error(`Crop Doctor analyze error (${lang}):`, message);
+      const status =
+        lower.includes('429') || lower.includes('quota') || lower.includes('resource_exhausted')
+          ? 429
+          : lower.includes('timeout') || lower.includes('aborted')
+            ? 504
+            : 502;
+      res.status(status).json({
+        error: message,
+        code: status === 429 ? 'RATE_LIMITED' : status === 504 ? 'TIMEOUT' : 'ANALYSIS_FAILED',
       });
     }
   });
@@ -1021,12 +1106,19 @@ async function createServer() {
         turns: existing.turns.map((t) => ({ role: t.role, text: t.text })),
       });
 
-      const ttsResult = await synthesizeBestAvailableTts({
-        text: answer,
-        language: lang,
-        voice: settings.voiceName,
-        speed: settings.voiceSpeed,
-      });
+      let ttsResult: Awaited<ReturnType<typeof synthesizeBestAvailableTts>> = {
+        ttsProvider: 'browser-fallback',
+      };
+      try {
+        ttsResult = await synthesizeBestAvailableTts({
+          text: answer,
+          language: lang,
+          voice: settings.voiceName,
+          speed: settings.voiceSpeed,
+        });
+      } catch (ttsErr) {
+        console.warn('Crop Doctor follow-up TTS warning:', ttsErr instanceof Error ? ttsErr.message : ttsErr);
+      }
 
       const now = new Date().toISOString();
       const updated: CropDoctorRecord = {
@@ -1047,6 +1139,7 @@ async function createServer() {
             audioBase64: ttsResult.audioBase64,
             audioMime: ttsResult.audioMime,
             ttsProvider: ttsResult.ttsProvider,
+            ttsError: ttsResult.ttsError,
           },
         ],
         updatedAt: now,
@@ -1055,8 +1148,16 @@ async function createServer() {
       store.upsertCropDoctorRecord(userId, updated);
       res.json({ record: updated });
     } catch (err) {
-      res.status(502).json({
-        error: err instanceof Error ? err.message : 'Follow-up response failed.',
+      const message = err instanceof Error ? err.message : 'Follow-up response failed.';
+      const lower = message.toLowerCase();
+      console.error(`Crop Doctor followup error (${lang}):`, message);
+      const status =
+        lower.includes('429') || lower.includes('quota') || lower.includes('resource_exhausted')
+          ? 429
+          : 502;
+      res.status(status).json({
+        error: message,
+        code: status === 429 ? 'RATE_LIMITED' : 'FOLLOWUP_FAILED',
       });
     }
   });

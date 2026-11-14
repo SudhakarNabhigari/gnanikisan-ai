@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import type {
   AppLanguage,
   CropAnalysisResult,
@@ -22,6 +22,37 @@ function getAiClient(apiVersion?: 'v1beta' | 'v1alpha'): GoogleGenAI {
       },
     },
   });
+}
+
+function isQuotaExhaustedError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return msg.includes('429') || msg.includes('resource_exhausted') || msg.includes('quota');
+}
+
+async function generateWithModelFallback(
+  ai: GoogleGenAI,
+  params: Omit<Parameters<GoogleGenAI['models']['generateContent']>[0], 'model'>
+) {
+  try {
+    return await ai.models.generateContent({
+      model: 'gemini-4-hydrogen',
+      ...params,
+    });
+  } catch (err) {
+    if (!isQuotaExhaustedError(err)) {
+      throw err;
+    }
+    const baseConfig =
+      params.config && typeof params.config === 'object' ? { ...params.config } : undefined;
+    if (baseConfig && 'thinkingConfig' in baseConfig) {
+      delete (baseConfig as Record<string, unknown>).thinkingConfig;
+    }
+    return await ai.models.generateContent({
+      model: 'gemini-3.1-flash-lite',
+      ...params,
+      ...(baseConfig ? { config: baseConfig } : {}),
+    });
+  }
 }
 
 function languageName(lang: AppLanguage): string {
@@ -241,8 +272,7 @@ export async function generateFarmAssistantReply(params: {
     ? `Previous conversation:\n${conversationTranscript}\n\nLatest farmer question: ${params.question}`
     : params.question;
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-4-hydrogen',
+  const response = await generateWithModelFallback(ai, {
     contents: prompt,
     config: {
       systemInstruction,
@@ -367,6 +397,34 @@ export async function transcribeAudioWithGeminiFallback(
   throw lastError instanceof Error ? lastError : new Error('Audio transcription failed.');
 }
 
+function ensureWavContainer(raw: Buffer, mimeType?: string): { buffer: Buffer; mime: string } {
+  if (raw.length >= 12 && raw.subarray(0, 4).toString('ascii') === 'RIFF') {
+    return { buffer: raw, mime: 'audio/wav' };
+  }
+  const lowerMime = (mimeType || '').toLowerCase();
+  if (lowerMime.includes('mpeg') || lowerMime.includes('mp3')) {
+    return { buffer: raw, mime: 'audio/mpeg' };
+  }
+  // Wrap headerless 24kHz mono 16-bit LE PCM into standard WAV container
+  const sampleRateMatch = /rate=(\d+)/i.exec(lowerMime);
+  const sampleRate = sampleRateMatch ? Number(sampleRateMatch[1]) || 24000 : 24000;
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0, 'ascii');
+  header.writeUInt32LE(36 + raw.length, 4);
+  header.write('WAVE', 8, 'ascii');
+  header.write('fmt ', 12, 'ascii');
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20); // PCM
+  header.writeUInt16LE(1, 22); // mono
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(sampleRate * 2, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write('data', 36, 'ascii');
+  header.writeUInt32LE(raw.length, 40);
+  return { buffer: Buffer.concat([header, raw]), mime: 'audio/wav' };
+}
+
 export async function synthesizeSpeechWithGeminiFallback(text: string): Promise<{
   audioBase64: string;
   audioMime: string;
@@ -376,9 +434,9 @@ export async function synthesizeSpeechWithGeminiFallback(text: string): Promise<
     throw new Error('Empty text for Gemini TTS.');
   }
 
-  const attempts: Array<{ apiVersion: 'v1beta' | 'v1alpha'; includeSpeechMetadata: boolean }> = [
-    { apiVersion: 'v1beta', includeSpeechMetadata: false },
-    { apiVersion: 'v1alpha', includeSpeechMetadata: false },
+  const attempts: Array<{ apiVersion: 'v1beta' | 'v1alpha' }> = [
+    { apiVersion: 'v1beta' },
+    { apiVersion: 'v1alpha' },
   ];
 
   let lastError: unknown = null;
@@ -409,18 +467,125 @@ export async function synthesizeSpeechWithGeminiFallback(text: string): Promise<
       const audioPart = parts.find((p) => Boolean(p?.inlineData?.data));
       const base64Audio = audioPart?.inlineData?.data;
       if (base64Audio) {
-        return {
-          audioBase64: base64Audio,
-          audioMime: audioPart?.inlineData?.mimeType || 'audio/wav',
-        };
+        const rawBuf = Buffer.from(base64Audio, 'base64');
+        if (rawBuf.length >= 128) {
+          const wrapped = ensureWavContainer(rawBuf, audioPart?.inlineData?.mimeType);
+          return {
+            audioBase64: wrapped.buffer.toString('base64'),
+            audioMime: wrapped.mime,
+          };
+        }
       }
-      lastError = new Error('Gemini TTS did not return audio output.');
+      lastError = new Error('Gemini TTS did not return playable audio output.');
     } catch (err) {
       lastError = err;
     }
   }
 
   throw lastError instanceof Error ? lastError : new Error('Gemini TTS synthesis failed.');
+}
+
+const CROP_FALLBACK_TEXT: Record<
+  AppLanguage,
+  {
+    cropDefault: string;
+    possibleIssueDefault: string;
+    severityUnclear: string;
+    severityDefault: string;
+    confidenceNoteDefault: string;
+    ipmGuidanceDefault: string;
+    disclaimer: string;
+    emptyAnalysisError: string;
+    emptyFollowUpError: string;
+  }
+> = {
+  en: {
+    cropDefault: 'Crop',
+    possibleIssueDefault: 'Visual Symptom Assessment',
+    severityUnclear: 'Undetermined (Photo needs clearer close-up)',
+    severityDefault: 'Moderate (Visual estimate)',
+    confidenceNoteDefault:
+      'Visual assessment only — confirm crop stage and diagnosis with your local Agriculture Officer / KVK before chemical application.',
+    ipmGuidanceDefault:
+      'Prioritize field sanitation, balanced nutrition, and non-chemical IPM practices before considering registered inputs.',
+    disclaimer:
+      'Advisory Notice: Visual image inspection cannot replace field verification. Always read the official CIBRC label and consult your local Krishi Vigyan Kendra (KVK) or Agriculture Officer before using any plant protection product.',
+    emptyAnalysisError: 'The vision model returned an empty or incomplete crop analysis. Please retry.',
+    emptyFollowUpError: 'Unable to generate a follow-up answer right now. Please try again.',
+  },
+  te: {
+    cropDefault: 'పంట',
+    possibleIssueDefault: 'దృశ్య లక్షణాల పరిశీలన',
+    severityUnclear: 'నిర్ధారించబడలేదు (మరింత స్పష్టమైన దగ్గరి ఫోటో అవసరం)',
+    severityDefault: 'మధ్యస్థం (దృశ్య అంచనా)',
+    confidenceNoteDefault:
+      'ఇది ఫోటో ఆధారిత ప్రాథమిక పరిశీలన మాత్రమే — ఏదైనా పిచికారీ చేసే ముందు పంట దశ మరియు సమస్యను స్థానిక వ్యవసాయ అధికారి / KVK వద్ద నిర్ధారించుకోండి.',
+    ipmGuidanceDefault:
+      'రసాయనాల కంటే ముందు పొలం శుభ్రత, సమతుల్య పోషణ మరియు రసాయనేతర సమగ్ర సస్యరక్షణ (IPM) పద్ధతులకు ప్రాధాన్యత ఇవ్వండి.',
+    disclaimer:
+      'సూచన గమనిక: ఫోటో పరిశీలన నేరుగా పొలంలో చేసే తనిఖీకి ప్రత్యామ్నాయం కాదు. ఏదైనా పంట రక్షణ ఉత్పత్తిని వాడే ముందు అధికారిక CIBRC లేబుల్ చదివి స్థానిక కృషి విజ్ఞాన కేంద్రం (KVK) లేదా వ్యవసాయ అధికారిని సంప్రదించండి.',
+    emptyAnalysisError: 'పంట ఫోటో విశ్లేషణ అసంపూర్తిగా వచ్చింది. దయచేసి మళ్లీ ప్రయత్నించండి.',
+    emptyFollowUpError: 'తదుపరి ప్రశ్నకు సమాధానం రూపొందించలేకపోయాము. దయచేసి మళ్లీ ప్రయత్నించండి.',
+  },
+  hi: {
+    cropDefault: 'फसल',
+    possibleIssueDefault: 'दृश्य लक्षण निरीक्षण',
+    severityUnclear: 'अनिश्चित (अधिक साफ़ नज़दीकी फ़ोटो आवश्यक)',
+    severityDefault: 'मध्यम (दृश्य अनुमान)',
+    confidenceNoteDefault:
+      'यह केवल फ़ोटो के आधार पर प्रारंभिक जांच है — किसी भी रासायनिक छिड़काव से पहले स्थानीय कृषि अधिकारी / KVK से पुष्टि अवश्य करें।',
+    ipmGuidanceDefault:
+      'पंजीकृत इनपुट से पहले खेत की स्वच्छता, संतुलित पोषण और गैर-रासायनिक एकीकृत नाशीजीव प्रबंधन (IPM) को प्राथमिकता दें।',
+    disclaimer:
+      'सलाह सूचना: फ़ोटो का निरीक्षण खेत में प्रत्यक्ष जांच का विकल्प नहीं है। किसी भी फसल सुरक्षा उत्पाद के उपयोग से पहले आधिकारिक CIBRC लेबल पढ़ें और अपने स्थानीय कृषि विज्ञान केंद्र (KVK) या कृषि अधिकारी से परामर्श करें।',
+    emptyAnalysisError: 'फ़सल फ़ोटो विश्लेषण अधूरा रहा। कृपया पुनः प्रयास करें।',
+    emptyFollowUpError: 'इस समय उत्तर तैयार नहीं हो सका। कृपया पुनः प्रयास करें।',
+  },
+};
+
+function parseModelJsonObject<T>(rawText: string): T {
+  const cleaned = String(rawText ?? '')
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+
+  if (!cleaned) {
+    throw new Error('EMPTY_MODEL_JSON');
+  }
+
+  try {
+    return JSON.parse(cleaned) as T;
+  } catch {
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      return JSON.parse(cleaned.slice(firstBrace, lastBrace + 1)) as T;
+    }
+    throw new Error('INVALID_MODEL_JSON');
+  }
+}
+
+function isRetryableGeminiError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  if (msg.includes('400') || msg.includes('401') || msg.includes('403') || msg.includes('api_key')) {
+    return false;
+  }
+  if (msg.includes('429') || msg.includes('resource_exhausted') || msg.includes('quota')) {
+    return false;
+  }
+  return (
+    msg.includes('empty_model_json') ||
+    msg.includes('invalid_model_json') ||
+    msg.includes('500') ||
+    msg.includes('502') ||
+    msg.includes('503') ||
+    msg.includes('504') ||
+    msg.includes('unavailable') ||
+    msg.includes('fetch') ||
+    msg.includes('network') ||
+    msg.includes('timeout')
+  );
 }
 
 export async function analyzeCropImage(params: {
@@ -434,20 +599,30 @@ export async function analyzeCropImage(params: {
 }): Promise<CropAnalysisResult> {
   const ai = getAiClient();
   const targetLang = languageName(params.language);
+  const fb = CROP_FALLBACK_TEXT[params.language] ?? CROP_FALLBACK_TEXT.en;
+
+  const scriptRequirement =
+    params.language === 'te'
+      ? 'Write EVERY user-facing text field (crop, possibleIssue, symptomsSummary, explanation, severity, confidenceNote, careTips, preventionTips, ipmGuidance) strictly in natural Telugu script (తెలుగు). Do NOT leave any of those fields in English.'
+      : params.language === 'hi'
+        ? 'Write EVERY user-facing text field (crop, possibleIssue, symptomsSummary, explanation, severity, confidenceNote, careTips, preventionTips, ipmGuidance) strictly in natural Hindi Devanagari script (हिन्दी). Do NOT leave any of those fields in English.'
+        : 'Write EVERY user-facing text field (crop, possibleIssue, symptomsSummary, explanation, severity, confidenceNote, careTips, preventionTips, ipmGuidance) clearly in natural English.';
 
   const systemInstruction = [
     `You are GnaniCrop Doctor AI, a cautious plant health visual inspection assistant for Indian farmers.`,
-    `Respond with all user-facing text fields in ${targetLang}.`,
+    scriptRequirement,
     `Strict agricultural safety rules:`,
     `1. Inspect ONLY visible symptoms in the image. Never fabricate a numeric confidence percentage.`,
-    `2. If the image is blurry, dark, non-crop, too far away, or ambiguous, set isUnclear=true and advise taking a clear daylight close-up photo or consulting a local KVK / Agriculture Officer.`,
+    `2. If the image is blurry, dark, non-crop, too far away, or ambiguous, set isUnclear=true and advise taking a clear daylight close-up photo or consulting a local KVK / Agriculture Officer (in ${targetLang}).`,
     `3. Never prescribe chemical dosages (never output g/L, ml/L, or kg/acre chemical doses).`,
     `4. Prioritize Integrated Pest Management (IPM), cultural practices, resistant varieties, and biological measures.`,
     `5. Never claim a guaranteed cure.`,
-    `6. Also fill englishIssueKey in concise English (e.g. "Rice Blast", "Bacterial Leaf Blight", "Thrips", "Fall Armyworm", "Tikka Leaf Spot", "Unclear") for catalog matching.`,
+    `6. Fill englishIssueKey ONLY in concise English (e.g. "Rice Blast", "Bacterial Leaf Blight", "Thrips", "Fall Armyworm", "Tikka Leaf Spot", "Healthy", "Unclear") for internal reference catalog matching.`,
+    `7. Always provide 2-4 concise, practical careTips and 2-4 concise preventionTips in ${targetLang}.`,
   ].join('\n');
 
   const userPrompt = [
+    `Target response language: ${targetLang}`,
     `Farmer provided context:`,
     `- Crop Name: ${params.cropName || 'Not provided (identify from photo if clear)'}`,
     `- Location: ${params.location || 'Not provided'}`,
@@ -455,61 +630,7 @@ export async function analyzeCropImage(params: {
     `- Farmer Question: ${params.question || 'Please examine this crop photo, identify any visible problem, and suggest safe care and prevention tips.'}`,
   ].join('\n');
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-4-hydrogen',
-    contents: {
-      parts: [
-        {
-          inlineData: {
-            mimeType: params.mimeType,
-            data: params.imageBase64,
-          },
-        },
-        { text: userPrompt },
-      ],
-    },
-    config: {
-      systemInstruction,
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          crop: { type: Type.STRING },
-          possibleIssue: { type: Type.STRING },
-          englishIssueKey: { type: Type.STRING },
-          symptomsSummary: { type: Type.STRING },
-          explanation: { type: Type.STRING },
-          severity: { type: Type.STRING },
-          confidenceNote: { type: Type.STRING },
-          isUnclear: { type: Type.BOOLEAN },
-          careTips: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING },
-          },
-          preventionTips: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING },
-          },
-          ipmGuidance: { type: Type.STRING },
-        },
-        required: [
-          'crop',
-          'possibleIssue',
-          'englishIssueKey',
-          'symptomsSummary',
-          'explanation',
-          'severity',
-          'confidenceNote',
-          'isUnclear',
-          'careTips',
-          'preventionTips',
-          'ipmGuidance',
-        ],
-      },
-    },
-  });
-
-  const parsed = JSON.parse((response.text ?? '{}').trim()) as {
+  type ParsedAnalysis = {
     crop?: string;
     possibleIssue?: string;
     englishIssueKey?: string;
@@ -523,29 +644,125 @@ export async function analyzeCropImage(params: {
     ipmGuidance?: string;
   };
 
+  let parsed: ParsedAnalysis | null = null;
+  let lastError: unknown = null;
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const response = await generateWithModelFallback(ai, {
+        contents: {
+          parts: [
+            {
+              inlineData: {
+                mimeType: params.mimeType,
+                data: params.imageBase64,
+              },
+            },
+            { text: userPrompt },
+          ],
+        },
+        config: {
+          systemInstruction,
+          thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM },
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              crop: { type: Type.STRING },
+              possibleIssue: { type: Type.STRING },
+              englishIssueKey: { type: Type.STRING },
+              symptomsSummary: { type: Type.STRING },
+              explanation: { type: Type.STRING },
+              severity: { type: Type.STRING },
+              confidenceNote: { type: Type.STRING },
+              isUnclear: { type: Type.BOOLEAN },
+              careTips: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+              },
+              preventionTips: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+              },
+              ipmGuidance: { type: Type.STRING },
+            },
+            required: [
+              'crop',
+              'possibleIssue',
+              'englishIssueKey',
+              'symptomsSummary',
+              'explanation',
+              'severity',
+              'confidenceNote',
+              'isUnclear',
+              'careTips',
+              'preventionTips',
+              'ipmGuidance',
+            ],
+          },
+        },
+      });
+
+      const candidate = parseModelJsonObject<ParsedAnalysis>(response.text ?? '');
+      const hasContent =
+        Boolean(String(candidate.possibleIssue ?? '').trim()) &&
+        (Boolean(String(candidate.explanation ?? '').trim()) ||
+          Boolean(String(candidate.symptomsSummary ?? '').trim()));
+
+      if (!hasContent) {
+        throw new Error('EMPTY_MODEL_JSON');
+      }
+
+      parsed = candidate;
+      break;
+    } catch (err) {
+      lastError = err;
+      if (attempt === 0 && isRetryableGeminiError(err)) {
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        continue;
+      }
+      break;
+    }
+  }
+
+  if (!parsed) {
+    if (
+      lastError instanceof Error &&
+      (lastError.message === 'EMPTY_MODEL_JSON' || lastError.message === 'INVALID_MODEL_JSON')
+    ) {
+      throw new Error(fb.emptyAnalysisError);
+    }
+    throw lastError instanceof Error ? lastError : new Error(fb.emptyAnalysisError);
+  }
+
   const isUnclear = Boolean(parsed.isUnclear);
-  const cropLabel = parsed.crop || params.cropName || 'Crop';
+  const cropLabel = String(parsed.crop ?? '').trim() || params.cropName || fb.cropDefault;
   const issueKey = `${parsed.englishIssueKey || ''} ${parsed.possibleIssue || ''}`;
-  const verifiedProducts = findVerifiedProductsForDiagnosis(cropLabel, issueKey, isUnclear);
+  const verifiedProducts = findVerifiedProductsForDiagnosis(
+    cropLabel,
+    issueKey,
+    isUnclear,
+    params.language
+  );
+
+  const cleanTips = (items?: string[]) =>
+    Array.isArray(items) ? items.map((s) => String(s ?? '').trim()).filter(Boolean) : [];
 
   return {
     crop: cropLabel,
-    possibleIssue: parsed.possibleIssue || 'Visual Symptom Assessment',
-    symptomsSummary: parsed.symptomsSummary || '',
-    explanation: parsed.explanation || '',
-    severity: isUnclear ? 'Undetermined (Photo needs clearer close-up)' : parsed.severity || 'Moderate (Visual estimate)',
-    confidenceNote:
-      parsed.confidenceNote ||
-      'Visual assessment only — confirm crop stage and diagnosis with your local Agriculture Officer / KVK before chemical application.',
+    possibleIssue: String(parsed.possibleIssue ?? '').trim() || fb.possibleIssueDefault,
+    symptomsSummary: String(parsed.symptomsSummary ?? '').trim(),
+    explanation: String(parsed.explanation ?? '').trim(),
+    severity: isUnclear
+      ? String(parsed.severity ?? '').trim() || fb.severityUnclear
+      : String(parsed.severity ?? '').trim() || fb.severityDefault,
+    confidenceNote: String(parsed.confidenceNote ?? '').trim() || fb.confidenceNoteDefault,
     isUnclear,
-    careTips: parsed.careTips ?? [],
-    preventionTips: parsed.preventionTips ?? [],
-    ipmGuidance:
-      parsed.ipmGuidance ||
-      'Prioritize field sanitation, balanced nutrition, and non-chemical IPM practices before considering registered inputs.',
+    careTips: cleanTips(parsed.careTips),
+    preventionTips: cleanTips(parsed.preventionTips),
+    ipmGuidance: String(parsed.ipmGuidance ?? '').trim() || fb.ipmGuidanceDefault,
     verifiedProducts,
-    disclaimer:
-      'Advisory Notice: Visual image inspection cannot replace field verification. Always read the official CIBRC label and consult your local Krishi Vigyan Kendra (KVK) or Agriculture Officer before using any plant protection product.',
+    disclaimer: fb.disclaimer,
   };
 }
 
@@ -558,10 +775,11 @@ export async function generateCropDoctorFollowUp(params: {
 }): Promise<string> {
   const ai = getAiClient();
   const targetLang = languageName(params.language);
+  const fb = CROP_FALLBACK_TEXT[params.language] ?? CROP_FALLBACK_TEXT.en;
 
   const systemInstruction = [
     `You are GnaniCrop Doctor AI answering a follow-up question about an inspected crop.`,
-    `Always respond in ${targetLang}.`,
+    `Always respond strictly in natural ${targetLang}. Even if earlier turns were in another language, answer this follow-up question completely in ${targetLang}.`,
     `Inspected Crop: ${params.cropName}`,
     `Visual Finding: ${params.analysis.possibleIssue} (${params.analysis.confidenceNote})`,
     `Symptoms: ${params.analysis.symptomsSummary}`,
@@ -573,13 +791,17 @@ export async function generateCropDoctorFollowUp(params: {
     .map((t) => `${t.role === 'user' ? 'Farmer' : 'Crop Doctor'}: ${t.text}`)
     .join('\n');
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-4-hydrogen',
+  const response = await generateWithModelFallback(ai, {
     contents: `${historyText ? `Previous chat:\n${historyText}\n\n` : ''}Follow-up question: ${params.question}`,
     config: {
       systemInstruction,
+      thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM },
     },
   });
 
-  return (response.text ?? '').trim();
+  const text = (response.text ?? '').trim();
+  if (!text) {
+    throw new Error(fb.emptyFollowUpError);
+  }
+  return text;
 }

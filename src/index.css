@@ -41,8 +41,29 @@
   animation: pulse-ring 2.2s cubic-bezier(0.16, 1, 0.3, 1) infinite;
 }
 
+@keyframes leaf-sway {
+  0%, 100% {
+    transform: rotate(0deg) translateY(0px);
+  }
+  50% {
+    transform: rotate(2.4deg) translateY(3px);
+  }
+}
+
+.animate-leaf-sway {
+  animation: leaf-sway 6.5s ease-in-out infinite;
+  transform-origin: top right;
+}
+
+.animate-leaf-sway-left {
+  animation: leaf-sway 7.5s ease-in-out infinite;
+  transform-origin: top left;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .animate-pulse-ring {
+  .animate-pulse-ring,
+  .animate-leaf-sway,
+  .animate-leaf-sway-left {
     animation: none;
   }
 }

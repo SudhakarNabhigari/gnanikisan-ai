@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import type {
   FarmDetails,
   GovernmentScheme,
@@ -307,14 +309,81 @@ function normalizeAgmarknetRecord(raw: Record<string, unknown>): NormalizedAgmar
   };
 }
 
+const MANDI_CACHE_FILE = path.resolve(process.cwd(), '.data', 'mandi-cache.json');
+
+interface MandiCacheEntry {
+  cacheKey: string;
+  state?: string;
+  dataDate?: string;
+  fetchedAt: string;
+  items: MandiPriceRow[];
+}
+
+function readMandiCacheStore(): Record<string, MandiCacheEntry> {
+  try {
+    if (!fs.existsSync(MANDI_CACHE_FILE)) return {};
+    const parsed = JSON.parse(fs.readFileSync(MANDI_CACHE_FILE, 'utf8')) as Record<
+      string,
+      MandiCacheEntry
+    >;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeMandiCacheEntry(entry: MandiCacheEntry): void {
+  try {
+    const dir = path.dirname(MANDI_CACHE_FILE);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    const existing = readMandiCacheStore();
+    existing[entry.cacheKey] = entry;
+    const temp = `${MANDI_CACHE_FILE}.tmp.${process.pid}`;
+    fs.writeFileSync(temp, JSON.stringify(existing, null, 2), 'utf8');
+    fs.renameSync(temp, MANDI_CACHE_FILE);
+  } catch {
+    // Non-fatal cache write failure
+  }
+}
+
+function getCachedMandiForQuery(
+  crops: string[],
+  location: UserLocation | null
+): MandiCacheEntry | null {
+  const cache = readMandiCacheStore();
+  const stateKey = (location?.state || '').trim().toLowerCase() || 'national';
+  const candidateKeys = [stateKey, 'national'];
+  for (const key of candidateKeys) {
+    const entry = cache[key];
+    if (!entry || !Array.isArray(entry.items) || entry.items.length === 0) continue;
+    const cropMatches = entry.items.filter((item) =>
+      crops.some((c) => {
+        const tokens = getCropMatchTokens(c);
+        const hay = `${item.crop} ${item.commodity ?? ''}`.toLowerCase();
+        return tokens.some((tok) => hay.includes(tok));
+      })
+    );
+    if (cropMatches.length > 0) {
+      return { ...entry, items: cropMatches };
+    }
+  }
+  return null;
+}
+
 async function queryAgmarknetBatch(
   apiKey: string,
-  opts: { state?: string; stateParamName?: 'filters[state]' | 'filters[State]'; limit?: number }
+  opts: {
+    state?: string;
+    stateParamName?: 'filters[state]' | 'filters[state.keyword]' | 'filters[State]';
+    limit?: number;
+  }
 ): Promise<NormalizedAgmarknetRecord[]> {
   const url = new URL(AGMARKNET_RESOURCE_URL);
   url.searchParams.set('api-key', apiKey);
   url.searchParams.set('format', 'json');
-  url.searchParams.set('limit', String(opts.limit ?? 200));
+  url.searchParams.set('limit', String(opts.limit ?? 300));
   if (opts.state) {
     url.searchParams.set(opts.stateParamName ?? 'filters[state]', opts.state);
   }
@@ -340,18 +409,29 @@ async function queryAgmarknetBatch(
       ? `${e.cause.address}${e.cause.port ? `:${e.cause.port}` : ''}`
       : 'api.data.gov.in';
 
-    if (e?.name === 'TimeoutError' || e?.name === 'AbortError' || causeCode === 'ETIMEDOUT' || causeCode === 'UND_ERR_CONNECT_TIMEOUT') {
-      const wrapped = new Error(`Request to official data.gov.in AGMARKNET API timed out after 10s (${hostTarget}).`) as Error & { errorCode?: MandiPricesResponse['errorCode'] };
+    if (
+      e?.name === 'TimeoutError' ||
+      e?.name === 'AbortError' ||
+      causeCode === 'ETIMEDOUT' ||
+      causeCode === 'UND_ERR_CONNECT_TIMEOUT'
+    ) {
+      const wrapped = new Error(
+        `Request to official data.gov.in AGMARKNET API timed out after 10s (${hostTarget}).`
+      ) as Error & { errorCode?: MandiPricesResponse['errorCode'] };
       wrapped.errorCode = 'TIMEOUT';
       throw wrapped;
     }
     if (causeCode === 'ECONNREFUSED') {
-      const wrapped = new Error(`Connection refused by api.data.gov.in (${hostTarget}). Outbound HTTPS to NIC data.gov.in is blocked or refused from this hosting environment.`) as Error & { errorCode?: MandiPricesResponse['errorCode'] };
+      const wrapped = new Error(
+        `Connection refused by api.data.gov.in (${hostTarget}). Outbound HTTPS to NIC data.gov.in is blocked or refused from this hosting environment.`
+      ) as Error & { errorCode?: MandiPricesResponse['errorCode'] };
       wrapped.errorCode = 'CONNECTION_REFUSED';
       throw wrapped;
     }
     const detail = causeCode ? `${causeCode} (${hostTarget})` : e?.message || 'Network failure';
-    const wrapped = new Error(`Could not connect to api.data.gov.in: ${detail}`) as Error & { errorCode?: MandiPricesResponse['errorCode'] };
+    const wrapped = new Error(`Could not connect to api.data.gov.in: ${detail}`) as Error & {
+      errorCode?: MandiPricesResponse['errorCode'];
+    };
     wrapped.errorCode = 'NETWORK_ERROR';
     throw wrapped;
   }
@@ -369,7 +449,8 @@ async function queryAgmarknetBatch(
       msg = 'data.gov.in rate limit exceeded (HTTP 429). Please retry in a moment.';
     } else if (res.status === 404) {
       errorCode = 'DATASET_UNAVAILABLE';
-      msg = 'Official AGMARKNET dataset resource (9ef84268-d588-465a-a308-a864a43d0070) returned HTTP 404 Not Found.';
+      msg =
+        'Official AGMARKNET dataset resource (9ef84268-d588-465a-a308-a864a43d0070) returned HTTP 404 Not Found.';
     }
 
     const wrapped = new Error(msg) as Error & { errorCode?: MandiPricesResponse['errorCode'] };
@@ -416,6 +497,7 @@ export async function fetchMandiPrices(
       errorCode: 'NOT_CONFIGURED',
       isDemo: false,
       source: 'AGMARKNET (data.gov.in)',
+      fetchedAt: now,
       updatedAt: now,
       items: [],
       notice:
@@ -432,18 +514,24 @@ export async function fetchMandiPrices(
       stateRecords = await queryAgmarknetBatch(apiKey, {
         state: cleanState,
         stateParamName: 'filters[state]',
-        limit: 150,
+        limit: 300,
       });
       if (stateRecords.length === 0) {
         stateRecords = await queryAgmarknetBatch(apiKey, {
           state: cleanState,
+          stateParamName: 'filters[state.keyword]',
+          limit: 300,
+        });
+      }
+      if (stateRecords.length === 0) {
+        stateRecords = await queryAgmarknetBatch(apiKey, {
+          state: cleanState,
           stateParamName: 'filters[State]',
-          limit: 150,
+          limit: 300,
         });
       }
     }
 
-    // Fetch a national batch if state query didn't cover all selected crops
     let nationalRecords: NormalizedAgmarknetRecord[] = [];
     const findMatch = (cropName: string, pool: NormalizedAgmarknetRecord[]) => {
       const tokens = getCropMatchTokens(cropName);
@@ -463,58 +551,58 @@ export async function fetchMandiPrices(
     const items: MandiPriceRow[] = [];
     const missingAfterState: string[] = [];
 
+    const toRow = (crop: string, hit: NormalizedAgmarknetRecord): MandiPriceRow => ({
+      crop,
+      commodity: hit.commodity,
+      market: `${hit.market}${hit.district ? `, ${hit.district}` : ''}`,
+      state: hit.state || location?.state,
+      district: hit.district || undefined,
+      variety: hit.variety || undefined,
+      pricePerQuintal: hit.modalPrice,
+      minPrice: hit.minPrice,
+      maxPrice: hit.maxPrice,
+      changePercent: 0,
+      unit: '₹/quintal',
+      arrivalDate: hit.arrivalDate || undefined,
+      updatedAt: hit.arrivalDate || now,
+    });
+
     for (const crop of selected.slice(0, 6)) {
       const hit = findMatch(crop, stateRecords);
       if (hit) {
-        items.push({
-          crop,
-          commodity: hit.commodity,
-          market: `${hit.market}${hit.district ? `, ${hit.district}` : ''}`,
-          state: hit.state || location?.state,
-          district: hit.district || undefined,
-          variety: hit.variety || undefined,
-          pricePerQuintal: hit.modalPrice,
-          minPrice: hit.minPrice,
-          maxPrice: hit.maxPrice,
-          changePercent: 0,
-          unit: 'quintal',
-          updatedAt: hit.arrivalDate || now,
-        });
+        items.push(toRow(crop, hit));
       } else {
         missingAfterState.push(crop);
       }
     }
 
     if (missingAfterState.length > 0) {
-      nationalRecords = await queryAgmarknetBatch(apiKey, { limit: 250 });
+      nationalRecords = await queryAgmarknetBatch(apiKey, { limit: 350 });
       for (const crop of missingAfterState) {
         const hit = findMatch(crop, nationalRecords);
         if (hit) {
-          items.push({
-            crop,
-            commodity: hit.commodity,
-            market: `${hit.market}${hit.district ? `, ${hit.district}` : ''}`,
-            state: hit.state || undefined,
-            district: hit.district || undefined,
-            variety: hit.variety || undefined,
-            pricePerQuintal: hit.modalPrice,
-            minPrice: hit.minPrice,
-            maxPrice: hit.maxPrice,
-            changePercent: 0,
-            unit: 'quintal',
-            updatedAt: hit.arrivalDate || now,
-          });
+          items.push(toRow(crop, hit));
         }
       }
     }
 
     if (items.length > 0) {
-      const latestArrival = items.find((i) => i.updatedAt)?.updatedAt || now;
+      const latestArrival = items.find((i) => i.arrivalDate)?.arrivalDate || now.slice(0, 10);
+      const cacheKey = (location?.state || '').trim().toLowerCase() || 'national';
+      writeMandiCacheEntry({
+        cacheKey,
+        state: location?.state,
+        dataDate: latestArrival,
+        fetchedAt: now,
+        items,
+      });
       return {
         status: 'live',
         isDemo: false,
         source: 'AGMARKNET (data.gov.in)',
-        updatedAt: latestArrival,
+        dataDate: latestArrival,
+        fetchedAt: now,
+        updatedAt: now,
         items,
         notice: 'Live mandi prices fetched from AGMARKNET (data.gov.in).',
       };
@@ -524,6 +612,7 @@ export async function fetchMandiPrices(
       status: 'empty',
       isDemo: false,
       source: 'AGMARKNET (data.gov.in)',
+      fetchedAt: now,
       updatedAt: now,
       items: [],
       notice:
@@ -532,11 +621,28 @@ export async function fetchMandiPrices(
   } catch (err) {
     const typedErr = err as Error & { errorCode?: MandiPricesResponse['errorCode'] };
     const reason = typedErr instanceof Error ? typedErr.message : 'Unable to reach data.gov.in API.';
+    const cached = getCachedMandiForQuery(selected, location);
+    if (cached) {
+      return {
+        status: 'cached',
+        errorCode: typedErr?.errorCode || 'NETWORK_ERROR',
+        isDemo: false,
+        source: 'AGMARKNET (data.gov.in)',
+        dataDate: cached.dataDate,
+        fetchedAt: now,
+        cachedAt: cached.fetchedAt,
+        updatedAt: cached.fetchedAt,
+        items: cached.items,
+        error: reason,
+        notice: `Live AGMARKNET feed temporarily unavailable (${reason}). Showing last verified AGMARKNET prices from ${cached.dataDate || cached.fetchedAt.slice(0, 10)}.`,
+      };
+    }
     return {
       status: 'unavailable',
       errorCode: typedErr?.errorCode || 'NETWORK_ERROR',
       isDemo: false,
       source: 'AGMARKNET (data.gov.in)',
+      fetchedAt: now,
       updatedAt: now,
       items: [],
       error: reason,

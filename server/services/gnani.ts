@@ -210,7 +210,34 @@ export async function transcribeWithGnaniPrisma(
   });
 }
 
-async function callGnaniTtsOnce(params: {
+function detectAudioMimeFromBuffer(buf: Buffer, preferredMime: string): string | null {
+  if (!buf || buf.length < 128) return null;
+  const headAscii = buf.subarray(0, 16).toString('ascii');
+  if (headAscii.startsWith('RIFF') && buf.subarray(8, 12).toString('ascii') === 'WAVE') {
+    return 'audio/wav';
+  }
+  if (headAscii.startsWith('ID3')) {
+    return 'audio/mpeg';
+  }
+  // MPEG audio frame sync (11 set bits: 0xFF followed by 0xE0..0xFF)
+  if (buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0) {
+    return 'audio/mpeg';
+  }
+  if (headAscii.startsWith('OggS')) {
+    return 'audio/ogg';
+  }
+  if (headAscii.startsWith('fLaC')) {
+    return 'audio/flac';
+  }
+  // Reject HTML/JSON text masquerading as binary audio
+  const trimmedStart = buf.subarray(0, 64).toString('utf8').trimStart();
+  if (trimmedStart.startsWith('{') || trimmedStart.startsWith('<')) {
+    return null;
+  }
+  return preferredMime;
+}
+
+async function callGnaniTtsBufferOnce(params: {
   baseUrl: string;
   apiKey: string;
   text: string;
@@ -219,7 +246,7 @@ async function callGnaniTtsOnce(params: {
   language: string;
   speed: number;
   container: 'mp3' | 'wav';
-}): Promise<{ audioBase64: string; audioMime: string }> {
+}): Promise<{ buffer: Buffer; audioMime: string }> {
   const payload: Record<string, unknown> = {
     text: params.text,
     model: params.model,
@@ -267,33 +294,42 @@ async function callGnaniTtsOnce(params: {
     throw err;
   }
 
+  const preferredMime = params.container === 'mp3' ? 'audio/mpeg' : 'audio/wav';
   const contentType = (res.headers.get('content-type') || '').toLowerCase();
+
+  let rawBuffer: Buffer;
+
   if (contentType.includes('application/json')) {
     const json = (await res.json()) as Record<string, unknown>;
-    const b64 = json.audio || json.audio_base64 || json.data || json.audio_content;
-    if (typeof b64 !== 'string' || !b64.trim()) {
+    const b64Raw = json.audio || json.audio_base64 || json.data || json.audio_content;
+    if (typeof b64Raw !== 'string' || !b64Raw.trim()) {
       throw new Error('Gnani Timbre TTS returned JSON without audio data.');
     }
-    return {
-      audioBase64: b64.trim(),
-      audioMime: params.container === 'mp3' ? 'audio/mpeg' : 'audio/wav',
-    };
+    const cleanBase64 = b64Raw.replace(/^data:[^;]+;base64,/i, '').replace(/\s+/g, '');
+    rawBuffer = Buffer.from(cleanBase64, 'base64');
+  } else {
+    const arr = await res.arrayBuffer();
+    if (arr.byteLength === 0) {
+      throw new Error('Gnani Timbre TTS returned empty audio stream.');
+    }
+    rawBuffer = Buffer.from(arr);
   }
 
-  const arr = await res.arrayBuffer();
-  if (arr.byteLength === 0) {
-    throw new Error('Gnani Timbre TTS returned empty audio stream.');
+  const verifiedMime = detectAudioMimeFromBuffer(
+    rawBuffer,
+    contentType.includes('mpeg') || contentType.includes('mp3') ? 'audio/mpeg' : preferredMime
+  );
+  if (!verifiedMime) {
+    throw new Error('Gnani Timbre TTS returned empty or invalid audio payload.');
   }
+
   return {
-    audioBase64: Buffer.from(arr).toString('base64'),
-    audioMime:
-      contentType.includes('mpeg') || contentType.includes('mp3') || params.container === 'mp3'
-        ? 'audio/mpeg'
-        : 'audio/wav',
+    buffer: rawBuffer,
+    audioMime: verifiedMime,
   };
 }
 
-function sanitizeTextForTts(raw: string, maxChars = 900): string {
+function sanitizeTextForTts(raw: string, maxChars = 2600): string {
   const cleaned = String(raw ?? '')
     .replace(/\*\*([^*]+)\*\*/g, '$1')
     .replace(/\*([^*]+)\*/g, '$1')
@@ -318,6 +354,111 @@ function sanitizeTextForTts(raw: string, maxChars = 900): string {
   return slice.trim();
 }
 
+function splitTextIntoTtsChunks(cleanText: string, maxChunkChars = 680): string[] {
+  if (cleanText.length <= maxChunkChars) return [cleanText];
+
+  const sentences = cleanText
+    .split(/(?<=[.!?।])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const chunks: string[] = [];
+  let current = '';
+
+  for (const sentence of sentences) {
+    if (!current) {
+      if (sentence.length <= maxChunkChars) {
+        current = sentence;
+      } else {
+        // Hard wrap overly long single sentence along whitespace
+        const words = sentence.split(/\s+/);
+        for (const word of words) {
+          if (!current) {
+            current = word;
+          } else if (current.length + 1 + word.length <= maxChunkChars) {
+            current += ` ${word}`;
+          } else {
+            chunks.push(current);
+            current = word;
+          }
+        }
+      }
+      continue;
+    }
+
+    if (current.length + 1 + sentence.length <= maxChunkChars) {
+      current += ` ${sentence}`;
+    } else {
+      chunks.push(current);
+      if (sentence.length <= maxChunkChars) {
+        current = sentence;
+      } else {
+        current = '';
+        const words = sentence.split(/\s+/);
+        for (const word of words) {
+          if (!current) current = word;
+          else if (current.length + 1 + word.length <= maxChunkChars) current += ` ${word}`;
+          else {
+            chunks.push(current);
+            current = word;
+          }
+        }
+      }
+    }
+  }
+
+  if (current) chunks.push(current);
+  return chunks.slice(0, 4);
+}
+
+function stripId3HeaderIfPresent(buf: Buffer): Buffer {
+  if (buf.length > 10 && buf.subarray(0, 3).toString('ascii') === 'ID3') {
+    const size =
+      ((buf[6] & 0x7f) << 21) |
+      ((buf[7] & 0x7f) << 14) |
+      ((buf[8] & 0x7f) << 7) |
+      (buf[9] & 0x7f);
+    const offset = 10 + size;
+    if (offset < buf.length) {
+      return buf.subarray(offset);
+    }
+  }
+  return buf;
+}
+
+function concatWavBuffers(buffers: Buffer[]): Buffer {
+  if (buffers.length === 1) return buffers[0];
+  const findDataOffset = (buf: Buffer): number => {
+    const idx = buf.indexOf(Buffer.from('data', 'ascii'));
+    if (idx >= 12 && idx + 8 <= buf.length) return idx + 8;
+    return 44;
+  };
+  const first = Buffer.from(buffers[0]);
+  const firstDataStart = findDataOffset(first);
+  const pcmParts: Buffer[] = [first.subarray(firstDataStart)];
+  for (let i = 1; i < buffers.length; i += 1) {
+    const dataStart = findDataOffset(buffers[i]);
+    pcmParts.push(buffers[i].subarray(dataStart));
+  }
+  const combinedPcm = Buffer.concat(pcmParts);
+  const header = Buffer.from(first.subarray(0, firstDataStart));
+  const dataHeaderOffset = firstDataStart - 8;
+  header.writeUInt32LE(header.length - 8 + combinedPcm.length, 4);
+  if (dataHeaderOffset >= 12) {
+    header.writeUInt32LE(combinedPcm.length, dataHeaderOffset + 4);
+  }
+  return Buffer.concat([header, combinedPcm]);
+}
+
+function concatAudioChunkBuffers(buffers: Buffer[], mime: string): Buffer {
+  if (buffers.length === 1) return buffers[0];
+  if (mime === 'audio/wav') {
+    return concatWavBuffers(buffers);
+  }
+  const parts = buffers.map((buf, idx) => (idx === 0 ? buf : stripId3HeaderIfPresent(buf)));
+  return Buffer.concat(parts);
+}
+
 /**
  * Calls Gnani Timbre TTS REST endpoint:
  * POST https://api.vachana.ai/api/v1/tts/inference
@@ -335,35 +476,51 @@ export async function synthesizeWithGnaniTimbre(options: {
 
   const baseUrl = (process.env.GNANI_API_BASE_URL || DEFAULT_BASE_URL).replace(/\/$/, '');
   const apiKey = (process.env.GNANI_API_KEY ?? '').trim();
-  const cleanText = sanitizeTextForTts(options.text, 750);
+  const cleanText = sanitizeTextForTts(options.text, 2600);
   if (!cleanText) {
     throw new Error('Empty text for speech synthesis.');
   }
 
+  const chunks = splitTextIntoTtsChunks(cleanText, 680);
   const langCode = mapLanguageToGnaniCode(options.language);
   const speed =
     typeof options.speed === 'number' ? Math.min(1.5, Math.max(0.75, options.speed)) : 1;
 
-  // Try configured voice on timbre-v3.0, then fallback to Nalini on timbre-v2.5
+  // Try configured voice on timbre-v3.0, then Nalini on timbre-v2.5 (mp3, then wav)
   const attempts: Array<{ voice?: string; model: string; container: 'mp3' | 'wav' }> = [
     { voice: options.voice || 'Nalini', model: 'timbre-v3.0', container: 'mp3' },
     { voice: 'Nalini', model: 'timbre-v2.5', container: 'mp3' },
+    { voice: 'Nalini', model: 'timbre-v2.5', container: 'wav' },
   ];
 
   return withGnaniLock(async () => {
     let lastErr: Error | null = null;
     for (const attempt of attempts) {
       try {
-        return await callGnaniTtsOnce({
-          baseUrl,
-          apiKey,
-          text: cleanText,
-          voice: attempt.voice,
-          model: attempt.model,
-          language: langCode,
-          speed,
-          container: attempt.container,
-        });
+        const chunkBuffers: Buffer[] = [];
+        let resolvedMime = attempt.container === 'mp3' ? 'audio/mpeg' : 'audio/wav';
+        for (let i = 0; i < chunks.length; i += 1) {
+          if (i > 0) {
+            await sleep(160);
+          }
+          const res = await callGnaniTtsBufferOnce({
+            baseUrl,
+            apiKey,
+            text: chunks[i],
+            voice: attempt.voice,
+            model: attempt.model,
+            language: langCode,
+            speed,
+            container: attempt.container,
+          });
+          chunkBuffers.push(res.buffer);
+          resolvedMime = res.audioMime;
+        }
+        const combined = concatAudioChunkBuffers(chunkBuffers, resolvedMime);
+        return {
+          audioBase64: combined.toString('base64'),
+          audioMime: resolvedMime,
+        };
       } catch (err) {
         lastErr = err instanceof Error ? err : new Error(String(err));
         const status = (err as { status?: number })?.status;

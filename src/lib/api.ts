@@ -32,21 +32,61 @@ export function setAuthToken(token: string | null): void {
   }
 }
 
-export async function apiFetch<T>(url: string, options: RequestInit = {}): Promise<T> {
+export interface ApiFetchOptions extends RequestInit {
+  timeoutMs?: number;
+}
+
+export async function apiFetch<T>(url: string, options: ApiFetchOptions = {}): Promise<T> {
+  const { timeoutMs, signal: externalSignal, ...fetchOptions } = options;
   const token = getAuthToken();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...(options.headers as Record<string, string> | undefined),
+    ...(fetchOptions.headers as Record<string, string> | undefined),
   };
   if (token && !headers.Authorization) {
     headers.Authorization = `Bearer ${token}`;
   }
 
-  const res = await fetch(url, {
-    ...options,
-    credentials: 'include',
-    headers,
-  });
+  let controller: AbortController | null = null;
+  let timerId: number | null = null;
+  let timedOut = false;
+
+  if (typeof timeoutMs === 'number' && timeoutMs > 0) {
+    controller = new AbortController();
+    if (externalSignal) {
+      if (externalSignal.aborted) {
+        controller.abort();
+      } else {
+        externalSignal.addEventListener('abort', () => controller?.abort(), { once: true });
+      }
+    }
+    timerId = window.setTimeout(() => {
+      timedOut = true;
+      controller?.abort();
+    }, timeoutMs);
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      ...fetchOptions,
+      credentials: 'include',
+      headers,
+      signal: controller ? controller.signal : externalSignal,
+    });
+  } catch (err) {
+    if (timerId !== null) window.clearTimeout(timerId);
+    if (timedOut || (err instanceof DOMException && err.name === 'AbortError')) {
+      throw new ApiError('Request timed out. Please try again.', 408, 'TIMEOUT');
+    }
+    throw new ApiError(
+      err instanceof Error && err.message ? err.message : 'Network connection failed.',
+      0,
+      'NETWORK_ERROR'
+    );
+  } finally {
+    if (timerId !== null) window.clearTimeout(timerId);
+  }
 
   const text = await res.text();
   let data: Record<string, unknown> = {};

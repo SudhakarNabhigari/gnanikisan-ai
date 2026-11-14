@@ -16,7 +16,7 @@ import {
 import { useEffect, useRef, useState } from 'react';
 import { AudioPlayer } from '../components/AudioPlayer';
 import { TRANSLATIONS } from '../i18n/translations';
-import { apiFetch } from '../lib/api';
+import { ApiError, apiFetch } from '../lib/api';
 import type {
   AppLanguage,
   AuthUser,
@@ -36,6 +36,42 @@ interface CropDoctorPageProps {
 
 const ALLOWED_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
 const MAX_BYTES = 10 * 1024 * 1024;
+const MAX_UPLOAD_DIMENSION = 1600;
+const OPTIMIZE_THRESHOLD_CHARS = 1_800_000;
+
+async function optimizeUploadDataUrl(rawDataUrl: string): Promise<string> {
+  if (rawDataUrl.length <= OPTIMIZE_THRESHOLD_CHARS || typeof document === 'undefined') {
+    return rawDataUrl;
+  }
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const scale = Math.min(
+          1,
+          MAX_UPLOAD_DIMENSION / Math.max(img.naturalWidth || 1, img.naturalHeight || 1)
+        );
+        const width = Math.max(1, Math.round((img.naturalWidth || 1) * scale));
+        const height = Math.max(1, Math.round((img.naturalHeight || 1) * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(rawDataUrl);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        const compressed = canvas.toDataURL('image/jpeg', 0.88);
+        resolve(compressed.length < rawDataUrl.length ? compressed : rawDataUrl);
+      } catch {
+        resolve(rawDataUrl);
+      }
+    };
+    img.onerror = () => resolve(rawDataUrl);
+    img.src = rawDataUrl;
+  });
+}
 
 export function CropDoctorPage({
   user,
@@ -107,8 +143,9 @@ export function CropDoctorPage({
     }
 
     const reader = new FileReader();
-    reader.onload = () => {
-      setImageDataUrl(String(reader.result));
+    reader.onload = async () => {
+      const optimized = await optimizeUploadDataUrl(String(reader.result));
+      setImageDataUrl(optimized);
       setRecord(null);
     };
     reader.onerror = () => setError(t.errReadFail);
@@ -116,6 +153,7 @@ export function CropDoctorPage({
   };
 
   const handleAnalyze = async () => {
+    if (analyzing) return;
     if (!imageDataUrl) {
       setError(t.errUploadFirst);
       return;
@@ -123,8 +161,9 @@ export function CropDoctorPage({
     setError(null);
     setAnalyzing(true);
     try {
-      const res = await apiFetch<{ record: CropDoctorRecord }>('/api/crop-doctor/analyze', {
+      const res = await apiFetch<{ record?: CropDoctorRecord }>('/api/crop-doctor/analyze', {
         method: 'POST',
+        timeoutMs: 90000,
         body: JSON.stringify({
           imageDataUrl,
           cropName: String(cropName ?? '').trim(),
@@ -134,9 +173,16 @@ export function CropDoctorPage({
           language,
         }),
       });
+      if (!res?.record?.analysis?.possibleIssue) {
+        throw new Error(t.errInvalidResponse);
+      }
       setRecord(res.record);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t.errAnalyzeFail);
+      if (err instanceof ApiError && err.code === 'TIMEOUT') {
+        setError(t.errTimeout);
+      } else {
+        setError(err instanceof Error && err.message ? err.message : t.errAnalyzeFail);
+      }
     } finally {
       setAnalyzing(false);
     }
@@ -145,22 +191,31 @@ export function CropDoctorPage({
   const handleFollowUp = async (e: React.FormEvent) => {
     e.preventDefault();
     const q = String(followUpInput ?? '').trim();
-    if (!record || !q || sendingFollowUp) return;
+    if (!record || !q || sendingFollowUp || analyzing) return;
     setFollowUpInput('');
     setSendingFollowUp(true);
     setError(null);
     try {
-      const res = await apiFetch<{ record: CropDoctorRecord }>('/api/crop-doctor/followup', {
+      const res = await apiFetch<{ record?: CropDoctorRecord }>('/api/crop-doctor/followup', {
         method: 'POST',
+        timeoutMs: 60000,
         body: JSON.stringify({
           recordId: record.id,
           question: q,
           language,
         }),
       });
+      if (!res?.record?.turns) {
+        throw new Error(t.errInvalidResponse);
+      }
       setRecord(res.record);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t.errFollowUpFail);
+      setFollowUpInput(q);
+      if (err instanceof ApiError && err.code === 'TIMEOUT') {
+        setError(t.errTimeout);
+      } else {
+        setError(err instanceof Error && err.message ? err.message : t.errFollowUpFail);
+      }
     } finally {
       setSendingFollowUp(false);
     }
@@ -208,8 +263,9 @@ export function CropDoctorPage({
               <button
                 key={l.id}
                 type="button"
+                disabled={analyzing || sendingFollowUp}
                 onClick={() => onChangeLanguage(l.id)}
-                className={`rounded-lg px-3 py-1.5 font-semibold transition ${
+                className={`rounded-lg px-3 py-1.5 font-semibold transition disabled:opacity-60 ${
                   language === l.id
                     ? 'bg-[#16A34A] text-white'
                     : 'text-slate-700 hover:bg-emerald-50 dark:text-emerald-200'
@@ -225,10 +281,22 @@ export function CropDoctorPage({
       {error && (
         <div
           role="alert"
-          className="flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-medium text-red-700 dark:border-red-900 dark:bg-red-950/50 dark:text-red-300"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-medium text-red-700 dark:border-red-900 dark:bg-red-950/50 dark:text-red-300"
         >
-          <AlertTriangle className="h-4 w-4 shrink-0" />
-          <span>{error}</span>
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            <span>{error}</span>
+          </div>
+          {imageDataUrl && !analyzing && (
+            <button
+              type="button"
+              onClick={handleAnalyze}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-red-300 bg-white px-3 py-1 text-xs font-semibold text-red-700 transition hover:bg-red-100 dark:border-red-800 dark:bg-red-950 dark:text-red-200"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              {t.retryAnalyzeBtn}
+            </button>
+          )}
         </div>
       )}
 
@@ -260,7 +328,10 @@ export function CropDoctorPage({
               type="file"
               accept="image/jpeg,image/png,image/webp"
               className="hidden"
-              onChange={(e) => handleFile(e.target.files?.[0])}
+              onChange={(e) => {
+                handleFile(e.target.files?.[0]);
+                e.currentTarget.value = '';
+              }}
             />
             <input
               ref={cameraInputRef}
@@ -268,7 +339,10 @@ export function CropDoctorPage({
               accept="image/jpeg,image/png,image/webp"
               capture="environment"
               className="hidden"
-              onChange={(e) => handleFile(e.target.files?.[0])}
+              onChange={(e) => {
+                handleFile(e.target.files?.[0]);
+                e.currentTarget.value = '';
+              }}
             />
 
             <div className="mt-3.5 grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -407,7 +481,17 @@ export function CropDoctorPage({
 
           {/* Detected Problem Summary Card */}
           <section className="rounded-2xl border border-emerald-200/70 bg-white p-5 shadow-xs dark:border-emerald-800/60 dark:bg-[#0D2115]">
-            {!record ? (
+            {analyzing ? (
+              <div className="flex flex-col items-center justify-center gap-2 py-8 text-center">
+                <Loader2 className="h-6 w-6 animate-spin text-[#16A34A]" />
+                <div className="text-xs font-semibold text-[#0D2315] dark:text-white">
+                  {t.analyzingConversationHint}
+                </div>
+                <p className="max-w-sm text-[11px] text-slate-500 dark:text-emerald-200/70">
+                  {t.analyzingSubHint}
+                </p>
+              </div>
+            ) : !record ? (
               <div className="py-8 text-center text-xs text-slate-500 dark:text-emerald-200/70">
                 {t.emptyAnalysisHint}
               </div>
@@ -494,7 +578,17 @@ export function CropDoctorPage({
             </div>
 
             <div className="my-3 flex-1 space-y-3 overflow-y-auto pr-1">
-              {!record ? (
+              {analyzing ? (
+                <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
+                  <Loader2 className="h-6 w-6 animate-spin text-[#16A34A]" />
+                  <p className="text-xs font-semibold text-[#0D2315] dark:text-white">
+                    {t.analyzingConversationHint}
+                  </p>
+                  <p className="max-w-xs text-[11px] text-slate-500 dark:text-emerald-200/70">
+                    {t.analyzingSubHint}
+                  </p>
+                </div>
+              ) : !record ? (
                 <div className="flex h-full items-center justify-center text-center text-xs text-slate-500 dark:text-emerald-200/70">
                   {t.emptyConversationHint}
                 </div>
@@ -522,11 +616,36 @@ export function CropDoctorPage({
                       <AudioPlayer
                         text={turn.text}
                         language={language}
+                        uiLanguage={language}
+                        downloadFilename={`gnanikisan-crop-doctor-${record.updatedAt.slice(0, 10)}-turn-${idx + 1}`}
                         audioBase64={turn.audioBase64}
                         audioMime={turn.audioMime}
                         ttsProvider={turn.ttsProvider}
+                        ttsError={turn.ttsError}
+                        cropDoctorRecordId={record.id}
+                        turnId={turn.id}
                         initialSpeed={settings.voiceSpeed}
                         autoPlay={idx === 1 && Boolean(turn.audioBase64)}
+                        onAudioRecovered={(payload) => {
+                          setRecord((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  turns: prev.turns.map((item) =>
+                                    item.id === turn.id
+                                      ? {
+                                          ...item,
+                                          audioBase64: payload.audioBase64,
+                                          audioMime: payload.audioMime,
+                                          ttsProvider: payload.ttsProvider,
+                                          ttsError: undefined,
+                                        }
+                                      : item
+                                  ),
+                                }
+                              : prev
+                          );
+                        }}
                       />
                     )}
                   </div>
@@ -617,7 +736,8 @@ export function CropDoctorPage({
                         rel="noopener noreferrer"
                         className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-emerald-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-emerald-900 hover:bg-emerald-50 dark:border-emerald-800 dark:bg-[#0D2115] dark:text-emerald-200"
                       >
-                        {t.sourceBtn} <ExternalLink className="h-3 w-3" />
+                        {prod.linkType === 'search' ? t.searchProductBtn : t.viewProductBtn}{' '}
+                        <ExternalLink className="h-3 w-3" />
                       </a>
                     </div>
                   </div>
