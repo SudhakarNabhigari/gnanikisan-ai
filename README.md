@@ -40,3 +40,13 @@ GnaniKisan AI is a full-stack multilingual web application built with React, Tai
    npm run build
    npm run start
    ```
+
+   🎯 Our Vision
+To make AI-powered agricultural assistance more accessible to Indian farmers, especially those who prefer communicating in their regional languages.
+
+🔗 Live Application:
+https://lnkd.in/gU9xZ4u8
+💻 GitHub Repository:
+https://lnkd.in/grcvgP8S
+🎥 Project Demo:
+https://lnkd.in/gqRcj8GK
